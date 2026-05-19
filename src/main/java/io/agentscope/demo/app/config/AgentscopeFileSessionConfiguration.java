@@ -17,6 +17,7 @@ public class AgentscopeFileSessionConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(AgentscopeFileSessionConfiguration.class);
 
+    /** 每个 sessionId 对应子目录，内含 memory_messages.jsonl、agent_meta.json 等。 */
     @Bean(destroyMethod = "close")
     public Session agentscopeSession(AgentscopeProperties properties) throws IOException {
         var root = properties.resolvedSessionRoot();

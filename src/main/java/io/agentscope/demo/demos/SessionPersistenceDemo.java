@@ -13,8 +13,7 @@ import io.agentscope.demo.SessionIds;
 import java.nio.file.Path;
 
 /**
- * Non-interactive session round-trip: {@code loadIfExists} → turn → {@code saveTo} → new agent
- * loads prior memory using a sanitized session id.
+ * 非交互 Session 往返演示：{@code loadIfExists} → 对话一轮 → {@code saveTo} → 新 Agent 实例加载同 sessionId 记忆。
  */
 public final class SessionPersistenceDemo {
 

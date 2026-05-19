@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 /** 文本对话意图：与 {@link io.agentscope.demo.app.service.DemoChatService} 路由一致。 */
 public final class ChatIntents {
 
+    /** 命中则挂载 upload_guide_dialog 技能并在 systemPrompt 中说明材料规则 */
     private static final Pattern UPLOAD_GUIDE =
             Pattern.compile(
                     "如何使用|怎么用|怎么上传|如何上传|使用说明|新手指南|第一次用|初次使用"
@@ -19,6 +20,7 @@ public final class ChatIntents {
                             + "|能做什么|有什么用|本助手\\s*能",
                     Pattern.CASE_INSENSITIVE);
 
+    /** 命中则结合 {@link io.agentscope.demo.app.upload.UploadMaterialCoverageStore} 只展示仍缺证照 */
     private static final Pattern REMAINING_FILES =
             Pattern.compile(
                     "还需要什么|还需要哪些|还缺什么|还缺哪些|还要上传什么|还要传什么|还要准备什么|"

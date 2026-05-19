@@ -6,7 +6,11 @@ import io.agentscope.demo.demos.StructuredOutputDemo;
 import io.agentscope.demo.demos.VisionDemo;
 import java.nio.file.Path;
 
-/** Dispatch demos by name. Requires {@code DASHSCOPE_API_KEY}. */
+/**
+ * 命令行演示入口（非 Spring Boot）：按子命令运行结构化输出、视觉、Session 持久化、技能等示例。
+ *
+ * <p>需设置环境变量 {@code DASHSCOPE_API_KEY}。
+ */
 public final class DemoMain {
 
     public static void main(String[] args) throws Exception {

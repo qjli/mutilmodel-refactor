@@ -39,6 +39,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+/**
+ * 多图证照视觉分析（SSE）：读 multipart 图片 → 流式 ReActAgent → 归一化 patch → 多主体歧义检测 → 推送 result。
+ *
+ * <p>事件类型见 {@link #sendJson}：{@code progress} / {@code thinking} / {@code assistant_text} / {@code result} /
+ * {@code done} / {@code error}。{@code formContext} 为前端当前表单 JSON，用于多轮上传与「已填报」合并歧义。
+ */
 @Service
 public class FormVisionStreamService {
 
@@ -57,6 +63,11 @@ public class FormVisionStreamService {
         this.uploadMaterialCoverageStore = uploadMaterialCoverageStore;
     }
 
+    /**
+     * 在调用方线程（通常为 {@code agentscopeTaskExecutor}）中执行完整分析；通过 {@code emitter} 推送事件。
+     *
+     * <p>方法结束前会 {@code complete()} 或 {@code completeWithError()}，控制器线程不得阻塞于此。
+     */
     public void runAnalysis(
             String sessionId, List<MultipartFile> files, String formContextJson, SseEmitter emitter) {
         final long t0 = System.nanoTime();
@@ -105,6 +116,7 @@ public class FormVisionStreamService {
                 mediaTypes.add(mediaTypeFor(parts.get(i)));
             }
 
+            // 按文件名关键词累计本会话已出现证照类型（非图像识别）
             uploadMaterialCoverageStore.mergeFromHints(safeId, names);
 
             sendJson(
@@ -128,6 +140,7 @@ public class FormVisionStreamService {
                                     AgentPrompts.visionUserPreamble(
                                             total, String.join("、", names)))
                             .build());
+            // 多图按顺序追加 ImageBlock（base64），与 DashScope 多模态消息格式一致
             for (int i = 0; i < imageBytes.size(); i++) {
                 blocks.add(
                         ImageBlock.builder()
@@ -162,6 +175,7 @@ public class FormVisionStreamService {
 
             agent.loadIfExists(agentscopeSession, safeId);
 
+            // 订阅推理链与摘要流，供前端展示「思考中」与中间文本
             StreamOptions streamOpts =
                     StreamOptions.builder()
                             .eventTypes(
@@ -218,6 +232,7 @@ public class FormVisionStreamService {
                     .blockLast(Duration.ofMinutes(12));
 
             FormVisionExtraction extraction = structured.get();
+            // 流结束未拿到结构化结果时，再同步 call 一次兜底
             if (extraction == null) {
                 Msg block =
                         agent.call(userMsg, FormVisionExtraction.class).block(Duration.ofMinutes(8));
@@ -230,13 +245,14 @@ public class FormVisionStreamService {
                 extraction.reply = "模型未返回可用的结构化结果，请稍后重试或检查图片清晰度。";
             }
 
-            extraction.uploadGuide = null;
+            extraction.uploadGuide = null; // 视觉链路不下发材料卡，由文本对话意图触发
             LinkedHashMap<String, Object> raw =
                     extraction.formPatch == null
                             ? new LinkedHashMap<>()
                             : new LinkedHashMap<>(extraction.formPatch);
             extraction.formPatch = FormVisionPatchNormalizer.normalize(raw);
             Map<String, Object> existingForm = FormVisionFormContextSupport.parseAndNormalize(formContextJson);
+            // 多主体 / 跨轮冲突：可能清空 patch 并填充 ambiguities
             FormVisionMultiEntityConflictDetector.apply(extraction, raw, existingForm);
 
             HashMap<String, Object> result = new HashMap<>();
@@ -297,6 +313,7 @@ public class FormVisionStreamService {
         return textOrEmpty(msg);
     }
 
+    /** 浏览器常上报 application/octet-stream，则按扩展名推断 image/jpeg 等。 */
     private static String mediaTypeFor(MultipartFile f) {
         String ct = f.getContentType();
         if (ct != null
@@ -324,6 +341,7 @@ public class FormVisionStreamService {
         return "image/jpeg";
     }
 
+    /** SSE {@code data} 行：Spring 将 Map 序列化为 JSON，前端按 {@code type} 字段分发。 */
     private void sendJson(SseEmitter emitter, Map<String, ?> payload) throws IOException {
         emitter.send(SseEmitter.event().data(payload, MediaType.APPLICATION_JSON));
     }

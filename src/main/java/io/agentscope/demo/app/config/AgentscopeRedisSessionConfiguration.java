@@ -25,6 +25,10 @@ public class AgentscopeRedisSessionConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(AgentscopeRedisSessionConfiguration.class);
 
+    /**
+     * AgentScope 专用 Lettuce 客户端（与 Spring {@link RedisConnectionFactory} 可并存两条连接）。
+     * {@code destroyMethod=shutdown} 在容器关闭时释放连接池。
+     */
     @Bean(destroyMethod = "shutdown")
     public RedisClient agentscopeLettuceClient(RedisProperties springRedis) {
         RedisURI uri = buildRedisUri(springRedis);
@@ -44,12 +48,15 @@ public class AgentscopeRedisSessionConfiguration {
                                 .build());
     }
 
+    /** 供 coverage 与健康检查使用；底层为 Spring Boot 默认 Lettuce 连接工厂。 */
     @Bean
     public StringRedisTemplate stringRedisTemplate(RedisConnectionFactory connectionFactory) {
         return new StringRedisTemplate(connectionFactory);
     }
 
+    /** 将 {@code spring.data.redis.*} 映射为 Lettuce {@link RedisURI}（支持 URL、密码、SSL、超时）。 */
     private static RedisURI buildRedisUri(RedisProperties props) {
+        // 优先 redis:// 或 rediss:// 完整 URL（云厂商常提供）
         if (props.getUrl() != null && !props.getUrl().isBlank()) {
             return RedisURI.create(props.getUrl());
         }

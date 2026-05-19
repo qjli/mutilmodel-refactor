@@ -39,9 +39,11 @@ public class FormVisionExtraction {
     @JsonProperty("multi_enterprise_conflict_applied")
     public boolean multiEnterpriseConflictApplied;
 
+    /** 多张道路危运证证号互斥时，整族 transport* 已从 patch 剔除。 */
     @JsonProperty("multi_transport_conflict_applied")
     public boolean multiTransportConflictApplied;
 
+    /** 多张危化经营许可证证号互斥时，整族 safety* 已从 patch 剔除。 */
     @JsonProperty("multi_safety_conflict_applied")
     public boolean multiSafetyConflictApplied;
 

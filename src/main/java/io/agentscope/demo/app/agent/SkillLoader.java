@@ -15,10 +15,12 @@ public final class SkillLoader {
 
     private SkillLoader() {}
 
+    /** 证照影像 → form_patch / ambiguities / reply（classpath {@code /skills/form_vision_fill.md}）。 */
     public static AgentSkill formVisionFill() throws IOException {
         return load("form_vision_fill", "Enterprise form vision: camelCase form_patch, ambiguities, reply sections.");
     }
 
+    /** 纯文本对话：如何使用、缺哪些材料（classpath {@code /skills/upload_guide_dialog.md}）。 */
     public static AgentSkill uploadGuideDialog() throws IOException {
         return load(
                 "upload_guide_dialog",

@@ -11,9 +11,9 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.demo.DashScopeSupport;
 
 /**
- * Registers a small {@link AgentSkill} via {@link SkillBox}. Code execution stays disabled here.
+ * 通过 {@link SkillBox} 注册小型 {@link AgentSkill} 的 CLI 演示；默认不开启代码执行沙箱。
  *
- * <p>When you need sandboxed scripts, compose explicitly (never enable blindly in production):
+ * <p>若需沙箱脚本，须显式配置（生产环境勿盲目开启）：
  *
  * <pre>{@code
  * skillBox.codeExecution()

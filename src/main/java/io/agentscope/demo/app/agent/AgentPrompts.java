@@ -10,6 +10,7 @@ public final class AgentPrompts {
 
     private AgentPrompts() {}
 
+    /** 视觉 Agent 共用系统提示开头（技能正文另由 SkillBox 注入）。 */
     public static String formVisionCore() {
         return "你是企业工商与资质信息填报助手。"
                 + "技能 **form_vision_fill** 全文已注入；按其中 camelCase 键、ISO 日期、ambiguities 与 reply 四节骨架执行。"

@@ -31,11 +31,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+/**
+ * 文本对话业务：构建 {@link ReActAgent}，按用户意图挂载技能，经 {@link Session} 做多轮记忆持久化。
+ *
+ * <p>结构化输出类型为 {@link io.agentscope.demo.app.web.dto.ChatFormAssistantResult}；{@code upload_guide}
+ * 在「如何使用 / 还缺什么」类意图下由服务端 {@link io.agentscope.demo.app.upload.UploadGuideFactory} 生成。
+ */
 @Service
 public class DemoChatService {
 
     private static final Logger log = LoggerFactory.getLogger(DemoChatService.class);
 
+    /** file 或 redis，由 {@code agentscope.session.store} 决定 */
     private final Session agentscopeSession;
     private final DashScopeChatModel chatDashScopeChatModel;
     private final UploadMaterialCoverageStore uploadMaterialCoverageStore;
@@ -49,11 +56,17 @@ public class DemoChatService {
         this.uploadMaterialCoverageStore = uploadMaterialCoverageStore;
     }
 
+    /**
+     * 处理一轮用户消息：加载历史 → 调用模型 → 写回 Session → 组装 HTTP 响应。
+     *
+     * <p>异常在方法内消化为友好 {@link ChatResponse}，避免直接向客户端抛 500（技能加载失败除外）。
+     */
     public ChatResponse chat(String sessionId, ChatRequest request) {
         String safeId = SessionIds.requireSafeSessionId(sessionId);
         String text = request.content().trim();
         final long t0 = System.nanoTime();
 
+        // 正则意图：是否展示材料说明卡、是否仅追问「还缺哪些证」
         final boolean uploadGuideIntent = ChatIntents.uploadGuide(text);
         final boolean remainingFilesIntent = ChatIntents.remainingFiles(text);
 
@@ -67,6 +80,7 @@ public class DemoChatService {
                 skillBox.registerSkill(SkillLoader.uploadGuideDialog());
             }
 
+            // 按意图拼接 systemPrompt：缺件追问时注入文件名推断的 coverage 摘要
             String sysPrompt = AgentPrompts.chatStructuredIntro();
             if (uploadGuideIntent) {
                 Set<String> coverage = uploadMaterialCoverageStore.readMerged(safeId);
@@ -90,6 +104,7 @@ public class DemoChatService {
                             .structuredOutputReminder(StructuredOutputReminder.PROMPT)
                             .build();
 
+            // 从 Session 恢复 memory_messages 等；无历史则空记忆启动
             agent.loadIfExists(agentscopeSession, safeId);
 
             Msg response =
@@ -100,6 +115,7 @@ public class DemoChatService {
                                             .build(),
                                     ChatFormAssistantResult.class)
                             .block(Duration.ofMinutes(3));
+            // 本轮 USER/ASSISTANT/TOOL 消息写回 Session（Redis 或磁盘）
             agent.saveTo(agentscopeSession, safeId);
 
             if (response == null) {
@@ -148,6 +164,9 @@ public class DemoChatService {
         }
     }
 
+    /**
+     * 材料卡不由模型生成：命中 upload 意图时由服务端构造，与 {@code UploadMaterialCoverageStore} 对齐。
+     */
     private UploadGuideDto resolveUploadGuide(
             boolean uploadGuideIntent, boolean remainingFilesIntent, String safeId) {
         if (!uploadGuideIntent) {

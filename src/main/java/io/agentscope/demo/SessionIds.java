@@ -3,18 +3,20 @@ package io.agentscope.demo;
 import java.util.Objects;
 
 /**
- * JsonSession uses {@code sessionId} as a directory name. Reject path traversal and unsafe
- * characters when the id comes from HTTP or other untrusted input.
+ * 会话 ID 安全校验：{@link io.agentscope.core.session.JsonSession} 与 Redis Session 均以 {@code sessionId}
+ * 作为目录名或键的一部分；来自 HTTP 的 id 必须拒绝路径穿越与非法字符。
  */
 public final class SessionIds {
 
+    /** 与前端 UUID 及运维习惯对齐的上限，防止异常超长路径/键。 */
     private static final int MAX_LEN = 128;
 
     private SessionIds() {}
 
     /**
-     * @param raw proposed session id (may be untrusted)
-     * @return normalized id safe for filesystem use as a single path segment
+     * @param raw 客户端传入的 sessionId（不可信）
+     * @return 修剪后的安全 id，可作为单一路径段或 Redis 键片段
+     * @throws IllegalArgumentException 空、过长、含 {@code ..}、分隔符或非法字符
      */
     public static String requireSafeSessionId(String raw) {
         Objects.requireNonNull(raw, "sessionId");

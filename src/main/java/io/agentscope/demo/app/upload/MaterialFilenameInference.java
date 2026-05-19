@@ -49,6 +49,7 @@ public final class MaterialFilenameInference {
         return out;
     }
 
+    /** 合并多文件名/提示文本的推断结果（去重，保持 canonical id）。 */
     public static Set<String> inferFromHints(Iterable<String> hints) {
         LinkedHashSet<String> merged = new LinkedHashSet<>();
         for (String h : hints) {

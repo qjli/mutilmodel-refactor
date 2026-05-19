@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 /**
  * 延迟创建底层 {@link Session}，避免应用启动阶段因 Redis 尚未就绪而失败；首次 load/save 时再连接。
  */
@@ -16,13 +17,16 @@ public final class LazyInitializingSession implements Session {
 
     private static final Logger log = LoggerFactory.getLogger(LazyInitializingSession.class);
 
+    /** 由配置类提供，通常为 {@code () -> RedisSession.builder()...build()}。 */
     private final Supplier<Session> delegateFactory;
+    /** 双重检查锁下的单例委托；volatile 保证多线程可见性。 */
     private volatile Session delegate;
 
     public LazyInitializingSession(Supplier<Session> delegateFactory) {
         this.delegateFactory = delegateFactory;
     }
 
+    /** 懒加载：仅首次持久化访问时创建真实 RedisSession 并打日志。 */
     private Session delegate() {
         Session local = delegate;
         if (local == null) {

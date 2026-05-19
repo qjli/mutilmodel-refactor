@@ -24,12 +24,18 @@ public class HealthController {
         this.redisConnectionFactory = redisConnectionFactory;
     }
 
+    /**
+     * 存活探测：始终返回 JSON；{@code store=redis} 时额外 PING。
+     *
+     * <p>Redis 不可达时 {@code status=DEGRADED}（进程仍存活，但会话持久化可能失败）。
+     */
     @GetMapping("/api/health")
     public Map<String, Object> health() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", "UP");
         body.put("sessionStore", agentscopeProperties.getSession().getStore());
         if (agentscopeProperties.isRedisSessionStore()) {
+            // file 模式不装配 RedisConnectionFactory，此处用 ObjectProvider 避免强依赖
             RedisConnectionFactory factory = redisConnectionFactory.getIfAvailable();
             if (factory == null) {
                 body.put("redis", "NOT_CONFIGURED");

@@ -11,8 +11,8 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.demo.DashScopeSupport;
 
 /**
- * Mirrors {@code StructuredOutputExample} from agentscope-examples: {@code agent.call(msg,
- * Schema.class)} plus business validation and Jackson field mapping.
+ * 结构化输出演示：{@code agent.call(msg, Schema.class)}，对比 {@link StructuredOutputReminder#TOOL_CHOICE}
+ * 与 {@link StructuredOutputReminder#PROMPT} 两种提醒模式。
  */
 public final class StructuredOutputDemo {
 

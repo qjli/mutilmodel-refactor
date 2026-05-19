@@ -4,11 +4,15 @@ import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
 
-/** Shared DashScope model construction for CLI demos and Spring-managed beans. */
+/**
+ * DashScope（百炼）模型构建工厂：CLI {@link io.agentscope.demo.DemoMain} 与 Spring {@link
+ * io.agentscope.demo.app.config.DashScopeModelConfig} 共用，避免重复配置 API Key、流式与 thinking 开关。
+ */
 public final class DashScopeSupport {
 
     private DashScopeSupport() {}
 
+    /** 读取必填环境变量；CLI 演示在缺少密钥时快速失败。 */
     public static String requireEnv(String name) {
         String v = System.getenv(name);
         if (v == null || v.isBlank()) {
@@ -29,6 +33,7 @@ public final class DashScopeSupport {
         return chatModel(requireEnv("DASHSCOPE_API_KEY"), modelName, stream);
     }
 
+    /** 文本对话模型：显式传入 API Key 与模型名（Spring 使用 {@code qwen-max}）。 */
     public static DashScopeChatModel chatModel(String apiKey, String modelName, boolean stream) {
         return DashScopeChatModel.builder()
                 .apiKey(requireApiKey(apiKey))

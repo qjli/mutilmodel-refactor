@@ -22,10 +22,12 @@ public class AgentscopeProperties {
         this.session = session != null ? session : new SessionStore();
     }
 
+    /** {@code store=file} 时 JsonSession 与 coverage 文件的根目录（绝对路径）。 */
     public Path resolvedSessionRoot() {
         return Path.of(session.getFileRoot()).toAbsolutePath().normalize();
     }
 
+    /** Redis 键前缀，保证以 {@code :} 结尾，供 Session 与 coverage 共用。 */
     public String normalizedKeyPrefix() {
         String p = session.getKeyPrefix();
         if (p == null || p.isBlank()) {
@@ -45,8 +47,11 @@ public class AgentscopeProperties {
 
     public static class SessionStore {
 
+        /** {@code redis}（默认）或 {@code file}，对应 {@link AgentscopeRedisSessionConfiguration} / {@link AgentscopeFileSessionConfiguration} */
         private String store = "redis";
+        /** AgentScope Session 与 coverage 侧车的 Redis 命名空间前缀 */
         private String keyPrefix = "agentscope:multimodal-demo:";
+        /** {@code store=file} 时磁盘会话根目录 */
         private String fileRoot = "data/agentscope-sessions";
 
         public String getStore() {

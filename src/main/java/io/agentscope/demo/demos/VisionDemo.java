@@ -11,7 +11,7 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.demo.DashScopeSupport;
 import java.util.List;
 
-/** Minimal vision path: Base64 PNG + {@code DashScopeChatFormatter} + qwen-vl-max. */
+/** 最小视觉链路：内嵌 Base64 PNG + DashScope 视觉模型流式描述。 */
 public final class VisionDemo {
 
     private VisionDemo() {}

@@ -14,6 +14,12 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+/**
+     * 证照覆盖侧车：Redis STRING，键 {@code {keyPrefix}coverage:{sessionId}}，JSON 数组，TTL 90 天。
+ *
+ * <p>使用 Spring {@link StringRedisTemplate}，与 AgentScope {@link io.agentscope.core.session.redis.RedisSession}
+ * 的 Lettuce 客户端分离。
+ */
 @Component
 @ConditionalOnProperty(prefix = "agentscope.session", name = "store", havingValue = "redis")
 public class RedisMaterialCoveragePersistence implements MaterialCoveragePersistence {
@@ -66,6 +72,7 @@ public class RedisMaterialCoveragePersistence implements MaterialCoveragePersist
         }
     }
 
+    /** 与 AgentScope 键同前缀、独立键名，避免与 {@code memory_messages:list} 冲突。 */
     private String coverageKey(String safeSessionId) {
         return properties.normalizedKeyPrefix() + "coverage:" + safeSessionId;
     }

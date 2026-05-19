@@ -16,11 +16,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+/**
+ * 证照覆盖侧车：与 JsonSession 同目录 {@code {fileRoot}/{sessionId}/upload_material_coverage.json}。
+ */
 @Component
 @ConditionalOnProperty(prefix = "agentscope.session", name = "store", havingValue = "file")
 public class FileMaterialCoveragePersistence implements MaterialCoveragePersistence {
 
     private static final Logger log = LoggerFactory.getLogger(FileMaterialCoveragePersistence.class);
+    /** 与 Redis 侧车语义一致，便于 file → redis 迁移脚本对照。 */
     private static final String FILE_NAME = "upload_material_coverage.json";
 
     private final Path sessionRoot;
@@ -72,6 +76,7 @@ public class FileMaterialCoveragePersistence implements MaterialCoveragePersiste
         return sessionRoot.resolve(safeSessionId).resolve(FILE_NAME);
     }
 
+    /** 磁盘 JSON：{@code {"detected":["BUSINESS_LICENSE",...]}} */
     @JsonIgnoreProperties(ignoreUnknown = true)
     static final class CoverageFile {
         public List<String> detected = new ArrayList<>();
