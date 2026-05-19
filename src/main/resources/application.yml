@@ -1,0 +1,36 @@
+server:
+  port: 8888
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+
+spring:
+  application:
+    name: multimodal-demo
+  config:
+    import: optional:file:./application-local.yml
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 55MB
+  web:
+    resources:
+      static-locations: classpath:/static/
+
+agentscope:
+  session-root: ${AGENTSCOPE_SESSION_ROOT:data/agentscope-sessions}
+
+# DashScope（通义 / 百炼）API Key，必填。生产环境务必用环境变量注入，勿写明文入库：
+#   export DASHSCOPE_API_KEY=sk-...
+# 本地开发可复制为 application-local.yml（已加入 .gitignore）并只在本机填写 dashscope.api-key。
+dashscope:
+  api-key: ${DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}
+  # qwen-vl-max 勿开启，否则会 400（thinking_budget）；更换支持思考的视觉模型后再设 true
+  vision-enable-thinking: true
+  vision-thinking-budget: ${DASHSCOPE_VISION_THINKING_BUDGET:1000}
+
+logging:
+  level:
+    root: INFO
+    io.agentscope.demo.app: DEBUG

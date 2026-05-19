@@ -1,0 +1,156 @@
+/* 顶栏：浅色门户 — 白底、细分割线、品牌红点缀（与参考填报界面一致） */
+
+.app-header {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 50;
+  background: #fff;
+  border-bottom: 1px solid #e8e8e8;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
+}
+
+.app-header__accent {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    #a8232a 0%,
+    #c42d36 50%,
+    #a8232a 100%
+  );
+  pointer-events: none;
+}
+
+.app-header__grid {
+  display: none;
+}
+
+.app-header__inner {
+  position: relative;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 14px 20px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 28px;
+  flex-wrap: wrap;
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.app-header__mark {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #fff5f5 0%, #fde8e8 100%);
+  border: 1px solid rgba(168, 35, 42, 0.2);
+  display: grid;
+  place-items: center;
+}
+
+.app-header__mark-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: #a8232a;
+  box-shadow: 0 1px 2px rgba(168, 35, 42, 0.25);
+}
+
+.app-header__titles {
+  min-width: 0;
+}
+
+.app-header__title {
+  margin: 0 0 4px !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+  font-weight: 600 !important;
+  font-size: 20px !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.02em;
+}
+
+@media (min-width: 768px) {
+  .app-header__title {
+    font-size: 22px !important;
+  }
+}
+
+.app-header__subtitle {
+  margin: 0;
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(0, 0, 0, 0.45);
+  letter-spacing: 0.01em;
+}
+
+.app-header__nav {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .app-header__nav {
+    display: flex;
+  }
+}
+
+.app-header__nav-link {
+  padding: 6px 14px;
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.65);
+  text-decoration: none;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.app-header__nav-link:hover {
+  color: #a8232a;
+  background: rgba(168, 35, 42, 0.06);
+}
+
+.app-header__aside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 10px;
+}
+
+.app-header__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.65);
+  background: #f5f5f5;
+  border: 1px solid #e8e8e8;
+  font-family: "Noto Sans SC", sans-serif;
+}
+
+.app-header__chip--session {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Noto Sans SC", monospace;
+  letter-spacing: 0.01em;
+  color: rgba(0, 0, 0, 0.75) !important;
+  background: #fafafa;
+}
+
+.app-header__chip--session .ant-typography-copy {
+  color: #1677ff !important;
+}

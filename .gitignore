@@ -1,0 +1,14 @@
+target/
+.idea/
+*.iml
+.DS_Store
+
+node_modules/
+.chorus/
+
+# 本地密钥（勿提交）
+application-local.yml
+**/application-local.yml
+
+# Vite build output（npm run build / mvn -Pfrontend package）
+src/main/resources/static/
