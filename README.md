@@ -504,8 +504,6 @@ flowchart LR
 | `StructuredOutputDemo` | `StructuredOutputReminder` + 结构化 DTO | 同 Web 文本链路思路 |
 | `VisionDemo` | 多模态 `ImageBlock` | 同 Web 视觉，但无 SSE |
 | `SkillDemo` | `SkillBox` + classpath 技能 | 同技能加载方式 |
-| `AutoContextDemo` | `AutoContextMemory`、`ContextOffloadTool` | **Web 未使用** |
-| `Mem0LongTermDemo` | `Mem0LongTermMemory` | **Web 未使用** |
 
 ### 相关配置与源码入口
 
