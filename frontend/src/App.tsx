@@ -44,6 +44,7 @@ import {
   normalizeVisionUploadGuide,
   postJson,
   postVisionFormStream,
+  serializeFormContextForVision,
   resolveSampleImageUrl,
   sanitizeAssistantReplyDisplay,
   sanitizeVisionAmbiguities,
@@ -625,6 +626,10 @@ export default function MultimodalConsole() {
       );
     };
 
+    const formContextJson = serializeFormContextForVision(
+      form.getFieldsValue(true) as Record<string, unknown>,
+    );
+
     try {
       await postVisionFormStream(sessionId, files, (ev) => {
         if (ev.type === "progress") {
@@ -641,17 +646,24 @@ export default function MultimodalConsole() {
         } else if (ev.type === "assistant_text") {
           patchVision((v) => ({ ...v, assistantLog: v.assistantLog + ev.delta }));
         } else if (ev.type === "result") {
-          const mergedPatch = augmentVisionFormPatchForHostClears(ev.formPatch ?? {}, {
-            multi_enterprise_conflict_applied: ev.multi_enterprise_conflict_applied,
-            multi_transport_conflict_applied: ev.multi_transport_conflict_applied,
-            multi_safety_conflict_applied: ev.multi_safety_conflict_applied,
-          });
+          const ambRaw = sanitizeVisionAmbiguities(ev.ambiguities);
+          const ambNormalized = normalizeVisionAmbiguities(ambRaw);
+          const ambiguityFieldKeys = ambNormalized.map((a) =>
+            normalizeVisionAmbiguityFieldKey(a.field_key),
+          );
+          const mergedPatch = augmentVisionFormPatchForHostClears(
+            ev.formPatch ?? {},
+            {
+              multi_enterprise_conflict_applied: ev.multi_enterprise_conflict_applied,
+              multi_transport_conflict_applied: ev.multi_transport_conflict_applied,
+              multi_safety_conflict_applied: ev.multi_safety_conflict_applied,
+            },
+            ambiguityFieldKeys,
+          );
           const patch = normalizeVisionFormPatch(mergedPatch);
           form.setFieldsValue(patch);
           persistForm();
-          setAmbiguities(
-            normalizeVisionAmbiguities(sanitizeVisionAmbiguities(ev.ambiguities)),
-          );
+          setAmbiguities(ambNormalized);
           const uploadGuide = normalizeVisionUploadGuide(ev.uploadGuide);
           setMessages((m) =>
             m.map((row) =>
@@ -693,7 +705,7 @@ export default function MultimodalConsole() {
             ),
           );
         }
-      });
+      }, undefined, formContextJson);
     } catch (err) {
       setMessages((m) =>
         m.map((row) =>

@@ -13,7 +13,7 @@ import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ThinkingBlock;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.StructuredOutputReminder;
-import io.agentscope.core.session.JsonSession;
+import io.agentscope.core.session.Session;
 import io.agentscope.core.skill.SkillBox;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.demo.SessionIds;
@@ -44,20 +44,21 @@ public class FormVisionStreamService {
 
     private static final Logger log = LoggerFactory.getLogger(FormVisionStreamService.class);
 
-    private final JsonSession jsonSession;
+    private final Session agentscopeSession;
     private final DashScopeChatModel formVisionDashScopeChatModel;
     private final UploadMaterialCoverageStore uploadMaterialCoverageStore;
 
     public FormVisionStreamService(
-            JsonSession jsonSession,
+            Session agentscopeSession,
             @Qualifier("formVisionDashScopeChatModel") DashScopeChatModel formVisionDashScopeChatModel,
             UploadMaterialCoverageStore uploadMaterialCoverageStore) {
-        this.jsonSession = jsonSession;
+        this.agentscopeSession = agentscopeSession;
         this.formVisionDashScopeChatModel = formVisionDashScopeChatModel;
         this.uploadMaterialCoverageStore = uploadMaterialCoverageStore;
     }
 
-    public void runAnalysis(String sessionId, List<MultipartFile> files, SseEmitter emitter) {
+    public void runAnalysis(
+            String sessionId, List<MultipartFile> files, String formContextJson, SseEmitter emitter) {
         final long t0 = System.nanoTime();
         String safeId = "";
         try {
@@ -159,7 +160,7 @@ public class FormVisionStreamService {
                             .structuredOutputReminder(StructuredOutputReminder.PROMPT)
                             .build();
 
-            agent.loadIfExists(jsonSession, safeId);
+            agent.loadIfExists(agentscopeSession, safeId);
 
             StreamOptions streamOpts =
                     StreamOptions.builder()
@@ -235,7 +236,8 @@ public class FormVisionStreamService {
                             ? new LinkedHashMap<>()
                             : new LinkedHashMap<>(extraction.formPatch);
             extraction.formPatch = FormVisionPatchNormalizer.normalize(raw);
-            FormVisionMultiEntityConflictDetector.apply(extraction, raw);
+            Map<String, Object> existingForm = FormVisionFormContextSupport.parseAndNormalize(formContextJson);
+            FormVisionMultiEntityConflictDetector.apply(extraction, raw, existingForm);
 
             HashMap<String, Object> result = new HashMap<>();
             result.put("type", "result");
@@ -252,7 +254,7 @@ public class FormVisionStreamService {
             result.put("multi_safety_conflict_applied", extraction.multiSafetyConflictApplied);
             sendJson(emitter, result);
 
-            agent.saveTo(jsonSession, safeId);
+            agent.saveTo(agentscopeSession, safeId);
             sendJson(emitter, Map.of("type", "done"));
             emitter.complete();
             log.info("[vision] done sessionId={} totalMs={}", safeId, (System.nanoTime() - t0) / 1_000_000L);

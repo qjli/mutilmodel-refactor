@@ -22,6 +22,11 @@ import java.util.regex.Pattern;
  */
 public final class FormVisionPatchNormalizer {
 
+    /** 与 {@link io.agentscope.demo.app.upload.MaterialSampleIds} 及前端材料卡白名单一致。 */
+    public static final String SAFETY_ADMIN_LICENSE_STANDARD = "危险化学品经营许可证";
+
+    public static final String TRANSPORT_ADMIN_LICENSE_STANDARD = "道路危险货物运输许可证";
+
     /** 与 {@code frontend/src/App.tsx} 中 {@code Form.Item} 的 {@code name} 一致。 */
     public static final Set<String> CANONICAL_KEYS =
             Set.of(
@@ -106,27 +111,31 @@ public final class FormVisionPatchNormalizer {
         alias("transportpermitissuingauthority", "transportIssuingAuthority");
         alias("transportissueauthority", "transportIssuingAuthority");
         alias("transportauthority", "transportIssuingAuthority");
-        alias("transportcompanyname", "transportAdminLicenseName");
-        alias("transportholdername", "transportAdminLicenseName");
-        alias("transportpermitholdername", "transportAdminLicenseName");
-        alias("transportbusinessscope", "transportAdminLicenseName");
-        alias("transportpermitbusinessscope", "transportAdminLicenseName");
+        alias("transportcompanyname", "companyName");
+        alias("transportholdername", "companyName");
+        alias("transportpermitholdername", "companyName");
+        alias("transportpermitname", "transportAdminLicenseName");
+        alias("transportcertificatename", "transportAdminLicenseName");
+        alias("transportlicensetitle", "transportAdminLicenseName");
         // 危化 / 安全生产
         alias("safetypermitnumber", "safetyLicenseNo");
         alias("safetylicensenumber", "safetyLicenseNo");
-        alias("safetycompanyname", "safetyAdminLicenseName");
-        alias("safetypermitholdername", "safetyAdminLicenseName");
-        alias("safetyholdername", "safetyAdminLicenseName");
+        alias("safetycompanyname", "companyName");
+        alias("safetypermitholdername", "companyName");
+        alias("safetyholdername", "companyName");
+        alias("safetypermitname", "safetyAdminLicenseName");
+        alias("safetycertificatename", "safetyAdminLicenseName");
+        alias("safetylicensetitle", "safetyAdminLicenseName");
         alias("safetypermitissuingauthority", "safetyIssuingAuthority");
         alias("safetyissueauthority", "safetyIssuingAuthority");
         alias("safetylegalrep", "safetyLegalRepresentative");
         alias("safetylegalrepresentative", "safetyLegalRepresentative");
         alias("safetypermitlegalrepresentative", "safetyLegalRepresentative");
-        alias("safetybusinessmode", "safetyAdminLicenseName");
-        alias("safetypermitbusinessmode", "safetyAdminLicenseName");
-        alias("safetybusinessscope", "safetyAdminLicenseName");
-        alias("safetypermitbusinessscope", "safetyAdminLicenseName");
-        alias("safetyscope", "safetyAdminLicenseName");
+        alias("safetybusinessmode", "businessScope");
+        alias("safetypermitbusinessmode", "businessScope");
+        alias("safetybusinessscope", "businessScope");
+        alias("safetypermitbusinessscope", "businessScope");
+        alias("safetyscope", "businessScope");
     }
 
     private static void alias(String lower, String canonical) {
@@ -170,8 +179,90 @@ public final class FormVisionPatchNormalizer {
         if (out.containsKey("safetyLicenseValidityRange")) {
             out.putIfAbsent("safetyLicenseValidityMode", "fixed");
         }
+        correctAdminLicenseNames(out);
         out.entrySet().removeIf(en -> !CANONICAL_KEYS.contains(en.getKey()));
         return out;
+    }
+
+    /**
+     * 证面「行政许可名称」须为证照标题（四种法定全称之一），不得把经营范围、许可范围、业户名称等写入
+     * {@code *AdminLicenseName}。
+     */
+    private static void correctAdminLicenseNames(LinkedHashMap<String, Object> out) {
+        if (hasSafetyPermitSignals(out)) {
+            String current = stringVal(out.get("safetyAdminLicenseName"));
+            if (!isStandardSafetyAdminLicenseName(current)) {
+                out.put("safetyAdminLicenseName", SAFETY_ADMIN_LICENSE_STANDARD);
+            }
+        }
+        if (hasTransportPermitSignals(out)) {
+            String current = stringVal(out.get("transportAdminLicenseName"));
+            if (!isStandardTransportAdminLicenseName(current)) {
+                out.put("transportAdminLicenseName", TRANSPORT_ADMIN_LICENSE_STANDARD);
+            }
+        }
+    }
+
+    private static boolean hasSafetyPermitSignals(LinkedHashMap<String, Object> out) {
+        return out.containsKey("safetyLicenseNo")
+                || out.containsKey("safetyIssuingAuthority")
+                || out.containsKey("safetyLegalRepresentative")
+                || out.containsKey("safetyLicenseValidityRange");
+    }
+
+    private static boolean hasTransportPermitSignals(LinkedHashMap<String, Object> out) {
+        return out.containsKey("transportLicenseNo")
+                || out.containsKey("transportIssuingAuthority")
+                || out.containsKey("transportLegalRepresentative")
+                || out.containsKey("transportLicenseValidityRange");
+    }
+
+    static boolean isStandardSafetyAdminLicenseName(String s) {
+        if (s == null || s.isBlank()) {
+            return false;
+        }
+        String t = s.trim();
+        return t.contains("危险化学品经营") && t.contains("许可证");
+    }
+
+    static boolean isStandardTransportAdminLicenseName(String s) {
+        if (s == null || s.isBlank()) {
+            return false;
+        }
+        String t = s.trim();
+        return t.contains("道路危险货物运输") && t.contains("许可证");
+    }
+
+    /** 模型常把「许可范围 / 经营范围」误写入证名键。 */
+    static boolean looksLikePermitScopeNotCertificateTitle(String s) {
+        if (s == null || s.isBlank()) {
+            return false;
+        }
+        String t = s.trim();
+        if (isStandardSafetyAdminLicenseName(t) || isStandardTransportAdminLicenseName(t)) {
+            return false;
+        }
+        if (t.matches(".*\\d+\\s*类.*项.*") || t.matches(".*\\d+类\\d+项.*")) {
+            return true;
+        }
+        if (t.contains("天然气") || t.contains("甲烷") || t.contains("无储存经营")) {
+            return true;
+        }
+        if (t.contains("限于") && (t.contains("用途") || t.contains("原料"))) {
+            return true;
+        }
+        if (t.contains("经营方式") || t.contains("许可范围")) {
+            return true;
+        }
+        return !t.contains("许可证") && !t.contains("许可") && t.length() > 14;
+    }
+
+    private static String stringVal(Object o) {
+        if (o == null) {
+            return null;
+        }
+        String s = String.valueOf(o).trim();
+        return s.isEmpty() ? null : s;
     }
 
     private static void coalesceValidityRanges(LinkedHashMap<String, Object> m, String family) {
@@ -359,15 +450,20 @@ public final class FormVisionPatchNormalizer {
             String sa = String.valueOf(a).trim();
             String sb = String.valueOf(b).trim();
             if (sa.isEmpty()) {
-                return sb;
+                return pickBetterAdminLicenseName(canon, sb);
             }
             if (sb.isEmpty()) {
-                return sa;
+                return pickBetterAdminLicenseName(canon, sa);
             }
-            if (sa.contains(sb) || sb.contains(sa)) {
-                return sa.length() >= sb.length() ? sa : sb;
+            String better = pickBetterAdminLicenseName(canon, sa);
+            String other = pickBetterAdminLicenseName(canon, sb);
+            if (isStandardAdminLicenseName(canon, better)) {
+                return better;
             }
-            return sa + "；" + sb;
+            if (isStandardAdminLicenseName(canon, other)) {
+                return other;
+            }
+            return better;
         }
         if (a instanceof String && b instanceof String) {
             String sa = ((String) a).trim();
@@ -419,6 +515,25 @@ public final class FormVisionPatchNormalizer {
     }
 
     /** 证号类字段：优先保留更长、含中文或字母前缀的证面原文，避免模型只输出数字片段。 */
+    private static String pickBetterAdminLicenseName(String canon, String s) {
+        if (s == null || s.isBlank()) {
+            return s;
+        }
+        String t = s.trim();
+        if (looksLikePermitScopeNotCertificateTitle(t)) {
+            return "transportAdminLicenseName".equals(canon)
+                    ? TRANSPORT_ADMIN_LICENSE_STANDARD
+                    : SAFETY_ADMIN_LICENSE_STANDARD;
+        }
+        return t;
+    }
+
+    private static boolean isStandardAdminLicenseName(String canon, String s) {
+        return "transportAdminLicenseName".equals(canon)
+                ? isStandardTransportAdminLicenseName(s)
+                : isStandardSafetyAdminLicenseName(s);
+    }
+
     private static String pickLongerPermitNo(String a, String b) {
         String x = preferUsccOne(a);
         String y = preferUsccOne(b);

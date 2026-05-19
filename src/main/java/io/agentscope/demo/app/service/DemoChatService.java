@@ -7,7 +7,7 @@ import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.StructuredOutputReminder;
-import io.agentscope.core.session.JsonSession;
+import io.agentscope.core.session.Session;
 import io.agentscope.core.skill.SkillBox;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.demo.SessionIds;
@@ -36,15 +36,15 @@ public class DemoChatService {
 
     private static final Logger log = LoggerFactory.getLogger(DemoChatService.class);
 
-    private final JsonSession jsonSession;
+    private final Session agentscopeSession;
     private final DashScopeChatModel chatDashScopeChatModel;
     private final UploadMaterialCoverageStore uploadMaterialCoverageStore;
 
     public DemoChatService(
-            JsonSession jsonSession,
+            Session agentscopeSession,
             @Qualifier("chatDashScopeChatModel") DashScopeChatModel chatDashScopeChatModel,
             UploadMaterialCoverageStore uploadMaterialCoverageStore) {
-        this.jsonSession = jsonSession;
+        this.agentscopeSession = agentscopeSession;
         this.chatDashScopeChatModel = chatDashScopeChatModel;
         this.uploadMaterialCoverageStore = uploadMaterialCoverageStore;
     }
@@ -90,7 +90,7 @@ public class DemoChatService {
                             .structuredOutputReminder(StructuredOutputReminder.PROMPT)
                             .build();
 
-            agent.loadIfExists(jsonSession, safeId);
+            agent.loadIfExists(agentscopeSession, safeId);
 
             Msg response =
                     agent.call(
@@ -100,7 +100,7 @@ public class DemoChatService {
                                             .build(),
                                     ChatFormAssistantResult.class)
                             .block(Duration.ofMinutes(3));
-            agent.saveTo(jsonSession, safeId);
+            agent.saveTo(agentscopeSession, safeId);
 
             if (response == null) {
                 return new ChatResponse("模型未返回内容，请稍后重试。", null, Instant.now(), null);

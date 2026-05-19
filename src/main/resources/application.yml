@@ -17,9 +17,21 @@ spring:
   web:
     resources:
       static-locations: classpath:/static/
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      password: ${REDIS_PASSWORD:123456}
+      # 有密码时在 application-local.yml 配置 spring.data.redis.password，或 export REDIS_PASSWORD
+      timeout: ${REDIS_TIMEOUT:3s}
 
 agentscope:
-  session-root: ${AGENTSCOPE_SESSION_ROOT:data/agentscope-sessions}
+  session:
+    # redis（默认，生产/多实例）| file（本地无 Redis）
+    store: ${AGENTSCOPE_SESSION_STORE:redis}
+    key-prefix: ${AGENTSCOPE_SESSION_KEY_PREFIX:agentscope:multimodal-demo:}
+    file-root: ${AGENTSCOPE_SESSION_ROOT:data/agentscope-sessions}
 
 # DashScope（通义 / 百炼）API Key，必填。生产环境务必用环境变量注入，勿写明文入库：
 #   export DASHSCOPE_API_KEY=sk-...

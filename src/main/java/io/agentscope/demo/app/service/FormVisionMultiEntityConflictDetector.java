@@ -39,9 +39,6 @@ public final class FormVisionMultiEntityConflictDetector {
 
     private static final Pattern ORG_MARKERS =
             Pattern.compile("(公司|企业|厂|中心|集团|合作社|经营部|商行|店|个体工商户)");
-    private static final Pattern YE_HU = Pattern.compile("业户名称\\s*[:：]\\s*([^；;\\n]+)");
-    private static final Pattern QIYE_NAME = Pattern.compile("企业名称\\s*[:：]\\s*([^；;\\n]+)");
-
     /**
      * 与技能「多张营业执照多主体」所列工商单行字段一致，并含 {@code legalRepresentative}；多主体时整族清空并逐项
      * 歧义。
@@ -62,21 +59,11 @@ public final class FormVisionMultiEntityConflictDetector {
             "businessScope",
             "legalRepresentative");
 
-    /** 已由 {@link #companyNameAmbiguity} / {@link #usccAmbiguity} 精确处理的键，避免族内歧义覆盖多候选。 */
-    private static final Set<String> ENTERPRISE_KEYS_WITH_STRUCTURED_AMBIGUITY =
-            Set.of("companyName", "unifiedSocialCreditCode");
-
     private static final Set<String> ENTERPRISE_KEY_SET = Set.copyOf(ENTERPRISE_BASIC_KEYS);
 
-    private static List<String> enterpriseFamilyKeysForBulkAmbiguity() {
-        List<String> out = new ArrayList<>();
-        for (String k : ENTERPRISE_BASIC_KEYS) {
-            if (!ENTERPRISE_KEYS_WITH_STRUCTURED_AMBIGUITY.contains(k)) {
-                out.add(k);
-            }
-        }
-        return out;
-    }
+    /** 多主体时仅从 patch 剔除、并允许前端按歧义键清空的工商字段（其余工商字段保留自动回填）。 */
+    private static final Set<String> ENTERPRISE_AMBIGUITY_KEYS =
+            Set.of("companyName", "companyShortName", "unifiedSocialCreditCode");
 
     private static final List<String> TRANSPORT_PERMIT_KEYS =
             List.of(
@@ -100,6 +87,24 @@ public final class FormVisionMultiEntityConflictDetector {
 
     private static final Set<String> SAFETY_KEY_SET = Set.copyOf(SAFETY_PERMIT_KEYS);
 
+    private static final String EXISTING_FORM_SOURCE_LABEL = "已填报（当前表单）";
+
+    /** 多轮上传时可能与「已填报」冲突、需逐项确认的工商字段（不含 companyName，单独处理）。 */
+    private static final List<String> ENTERPRISE_CROSS_UPLOAD_KEYS =
+            List.of(
+                    "unifiedSocialCreditCode",
+                    "legalRepresentative",
+                    "formerName",
+                    "enterpriseNature",
+                    "enterpriseType",
+                    "registeredRegion",
+                    "registeredAddressDetail",
+                    "actualLocation",
+                    "registeredZip",
+                    "registrationDate",
+                    "registeredCapital",
+                    "businessScope");
+
     private FormVisionMultiEntityConflictDetector() {}
 
     /**
@@ -107,10 +112,21 @@ public final class FormVisionMultiEntityConflictDetector {
      * @param rawPatch 归一化前模型原始 {@code form_patch} 快照（用于读取已被白名单丢弃的「业户名称 / 企业名称」等键）
      */
     public static void apply(FormVisionExtraction extraction, Map<String, Object> rawPatch) {
+        apply(extraction, rawPatch, Map.of());
+    }
+
+    /**
+     * @param existingForm 用户上传本轮影像前右侧表单已填内容（经 {@link FormVisionFormContextSupport} 归一化）
+     */
+    public static void apply(
+            FormVisionExtraction extraction,
+            Map<String, Object> rawPatch,
+            Map<String, Object> existingForm) {
         if (extraction == null) {
             return;
         }
         Map<String, Object> raw = rawPatch == null ? Map.of() : rawPatch;
+        Map<String, Object> existing = existingForm == null ? Map.of() : existingForm;
         LinkedHashMap<String, Object> patch = ensureMutablePatch(extraction);
         LinkedHashMap<String, Object> valueSnapshot = new LinkedHashMap<>(patch);
 
@@ -118,21 +134,26 @@ public final class FormVisionMultiEntityConflictDetector {
         collectCompanyNamesFromRaw(raw, companyCandidates);
         collectZhLabeledCompanyNamesFromRawStringValues(raw, companyCandidates);
         addIfNonBlank(companyCandidates, stringVal(patch.get("companyName")));
-        extractEmbeddedNames(stringVal(patch.get("transportAdminLicenseName")), YE_HU, companyCandidates);
-        extractEmbeddedNames(stringVal(patch.get("safetyAdminLicenseName")), QIYE_NAME, companyCandidates);
+        addIfNonBlank(companyCandidates, stringVal(existing.get("companyName")));
 
-        List<String> orgLike = companyCandidates.stream().filter(FormVisionMultiEntityConflictDetector::looksLikeOrgName).distinct().toList();
+        LinkedHashMap<String, String> companyNameSources = collectCompanyNameSources(raw, existing);
+        List<String> orgLike =
+                companyCandidates.stream()
+                        .filter(FormVisionMultiEntityConflictDetector::looksLikeOrgName)
+                        .distinct()
+                        .toList();
         List<String> conflictCluster = buildConflictCluster(orgLike);
+        List<String> companyNameOptions =
+                pickCompanyNameDisambiguationOptions(conflictCluster, orgLike, companyCandidates);
 
-        LinkedHashSet<String> usccCandidates = new LinkedHashSet<>();
-        collectUsccFromRaw(raw, usccCandidates);
-        collectUsccFromRawStringValues(raw, usccCandidates);
-        addIfNonBlank(usccCandidates, stringVal(patch.get("unifiedSocialCreditCode")));
-        List<String> usccDistinct = usccCandidates.stream().map(String::trim).distinct().toList();
-        List<String> usccConflict = buildUsccConflictCluster(usccDistinct);
+        LinkedHashMap<String, String> usccSources =
+                collectScalarFieldSources(raw, existing, patch, "unifiedSocialCreditCode");
+        List<String> usccValues = new ArrayList<>(usccSources.keySet());
+        List<String> usccConflict = buildUsccConflictCluster(usccValues);
+        boolean usccNeedsChoice = usccConflict.size() >= 2 || crossUploadScalarConflict(existing, patch, "unifiedSocialCreditCode");
 
         boolean multiEnterprise =
-                conflictCluster.size() >= 2 || usccConflict.size() >= 2 || companyCandidates.size() >= 2;
+                companyNameOptions.size() >= 2 || usccConflict.size() >= 2 || usccNeedsChoice;
 
         LinkedHashSet<String> transportNos = collectDistinctStringValuesForCanonical(raw, "transportLicenseNo");
         addIfNonBlank(transportNos, stringVal(patch.get("transportLicenseNo")));
@@ -143,36 +164,38 @@ public final class FormVisionMultiEntityConflictDetector {
         boolean multiSafety = buildPermitNoConflictCluster(new ArrayList<>(safetyNos)).size() >= 2;
 
         if (multiEnterprise) {
-            stripAmbiguitiesForFieldKeys(extraction, ENTERPRISE_KEY_SET);
-            removeKeys(patch, ENTERPRISE_KEY_SET);
-            List<String> nameOptions = pickCompanyNameDisambiguationOptions(conflictCluster, orgLike, companyCandidates);
-            if (!nameOptions.isEmpty()) {
-                appendAmbiguity(extraction, companyNameAmbiguity(nameOptions));
+            stripAmbiguitiesForFieldKeys(extraction, ENTERPRISE_AMBIGUITY_KEYS);
+            removeKeys(patch, ENTERPRISE_AMBIGUITY_KEYS);
+            if (companyNameOptions.size() >= 2) {
+                appendAmbiguity(extraction, companyNameAmbiguity(companyNameOptions, companyNameSources));
             }
-            if (usccConflict.size() >= 2) {
-                appendAmbiguity(extraction, usccAmbiguity(usccConflict));
-            } else {
-                String usccSnap = stringVal(valueSnapshot.get("unifiedSocialCreditCode"));
-                if (usccSnap != null && !usccSnap.isBlank()) {
-                    appendAmbiguity(
-                            extraction, adoptOrClearUnifiedSocialCreditWhenMultiEnterpriseSingle(usccSnap));
-                }
+            if (usccNeedsChoice && !usccSources.isEmpty()) {
+                List<String> usccOpts =
+                        usccConflict.size() >= 2
+                                ? usccConflict
+                                : new ArrayList<>(usccSources.keySet());
+                appendAmbiguity(extraction, scalarFieldAmbiguity("unifiedSocialCreditCode", usccOpts, usccSources));
             }
-            addFamilyAmbiguities(extraction, raw, valueSnapshot, enterpriseFamilyKeysForBulkAmbiguity());
             appendReplyHint(extraction);
         } else {
-            if (conflictCluster.size() >= 2 && !hasAmbiguityFor(extraction, "companyName")) {
+            if (companyNameOptions.size() >= 2 && !hasAmbiguityFor(extraction, "companyName")) {
                 patch.remove("companyName");
                 patch.remove("companyShortName");
-                appendAmbiguity(extraction, companyNameAmbiguity(conflictCluster));
+                appendAmbiguity(
+                        extraction, companyNameAmbiguity(companyNameOptions, companyNameSources));
                 appendReplyHint(extraction);
             }
             if (usccConflict.size() >= 2 && !hasAmbiguityFor(extraction, "unifiedSocialCreditCode")) {
                 patch.remove("unifiedSocialCreditCode");
-                appendAmbiguity(extraction, usccAmbiguity(usccConflict));
+                appendAmbiguity(
+                        extraction,
+                        scalarFieldAmbiguity(
+                                "unifiedSocialCreditCode", usccConflict, usccSources));
                 appendReplyHint(extraction);
             }
         }
+
+        applyCrossUploadEnterpriseAmbiguities(extraction, raw, patch, existing);
 
         if (multiTransport) {
             stripAmbiguitiesForFieldKeys(extraction, TRANSPORT_KEY_SET);
@@ -199,26 +222,222 @@ public final class FormVisionMultiEntityConflictDetector {
         }
     }
 
-    /** 优先使用互斥簇，其次 orgLike，否则退回原始企业名候选（含未通过 looksLikeOrgName 过滤的证面串）。 */
+    /**
+     * 返回须展示的全部公司名称候选（含已填报 A 与本轮各证 B/C），上限 8 条。
+     */
     private static List<String> pickCompanyNameDisambiguationOptions(
             List<String> conflictCluster, List<String> orgLike, LinkedHashSet<String> companyCandidates) {
+        LinkedHashSet<String> ordered = new LinkedHashSet<>();
         if (conflictCluster != null && conflictCluster.size() >= 2) {
-            return new ArrayList<>(conflictCluster);
+            ordered.addAll(conflictCluster);
         }
-        if (orgLike != null && orgLike.size() >= 2) {
-            return new ArrayList<>(orgLike.subList(0, Math.min(8, orgLike.size())));
-        }
-        if (companyCandidates != null && companyCandidates.size() >= 2) {
-            List<String> out = new ArrayList<>();
-            for (String c : companyCandidates) {
-                out.add(c);
-                if (out.size() >= 2) {
+        if (orgLike != null) {
+            for (String n : orgLike) {
+                ordered.add(n);
+                if (ordered.size() >= 8) {
                     break;
                 }
             }
-            return out;
         }
-        return List.of();
+        if (ordered.size() < 2 && companyCandidates != null) {
+            for (String c : companyCandidates) {
+                if (looksLikeOrgName(c)) {
+                    ordered.add(c);
+                }
+                if (ordered.size() >= 8) {
+                    break;
+                }
+            }
+        }
+        return ordered.size() >= 2 ? new ArrayList<>(ordered) : List.of();
+    }
+
+    private static LinkedHashMap<String, String> collectCompanyNameSources(
+            Map<String, Object> raw, Map<String, Object> existing) {
+        LinkedHashMap<String, String> valueToLabel = new LinkedHashMap<>();
+        String existingName = stringVal(existing.get("companyName"));
+        if (existingName != null) {
+            valueToLabel.put(existingName, EXISTING_FORM_SOURCE_LABEL);
+        }
+        if (raw != null) {
+            for (Map.Entry<String, Object> e : raw.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null) {
+                    continue;
+                }
+                LinkedHashMap<String, Object> one = new LinkedHashMap<>();
+                one.put(e.getKey(), e.getValue());
+                LinkedHashMap<String, Object> n = FormVisionPatchNormalizer.normalize(one);
+                String name = stringVal(n.get("companyName"));
+                if (name == null) {
+                    continue;
+                }
+                mergeSourceLabel(valueToLabel, name, sourceLabelFromRawKey(e.getKey()));
+            }
+        }
+        return valueToLabel;
+    }
+
+    private static LinkedHashMap<String, String> collectScalarFieldSources(
+            Map<String, Object> raw,
+            Map<String, Object> existing,
+            LinkedHashMap<String, Object> patch,
+            String fieldKey) {
+        LinkedHashMap<String, String> valueToLabel = new LinkedHashMap<>();
+        String existingVal = stringVal(existing.get(fieldKey));
+        if (existingVal != null) {
+            valueToLabel.put(existingVal, EXISTING_FORM_SOURCE_LABEL);
+        }
+        LinkedHashSet<String> distinct = collectDistinctStringValuesForCanonical(raw, fieldKey);
+        addIfNonBlank(distinct, stringVal(patch.get(fieldKey)));
+        for (String v : distinct) {
+            mergeSourceLabel(valueToLabel, v, "本轮影像识别");
+        }
+        if (raw != null) {
+            for (Map.Entry<String, Object> e : raw.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null) {
+                    continue;
+                }
+                LinkedHashMap<String, Object> one = new LinkedHashMap<>();
+                one.put(e.getKey(), e.getValue());
+                LinkedHashMap<String, Object> n = FormVisionPatchNormalizer.normalize(one);
+                String v = stringifyScalarForField(fieldKey, n.get(fieldKey));
+                if (v == null) {
+                    continue;
+                }
+                mergeSourceLabel(valueToLabel, v, sourceLabelFromRawKey(e.getKey()));
+            }
+        }
+        return valueToLabel;
+    }
+
+    private static void applyCrossUploadEnterpriseAmbiguities(
+            FormVisionExtraction extraction,
+            Map<String, Object> raw,
+            LinkedHashMap<String, Object> patch,
+            Map<String, Object> existing) {
+        for (String fieldKey : ENTERPRISE_CROSS_UPLOAD_KEYS) {
+            if (hasAmbiguityFor(extraction, fieldKey)) {
+                continue;
+            }
+            LinkedHashMap<String, String> sources =
+                    collectScalarFieldSources(raw, existing, patch, fieldKey);
+            if (sources.size() < 2) {
+                if (!crossUploadScalarConflict(existing, patch, fieldKey)) {
+                    continue;
+                }
+                String existingVal = stringVal(existing.get(fieldKey));
+                String newVal = stringVal(patch.get(fieldKey));
+                if (existingVal != null) {
+                    sources.putIfAbsent(existingVal, EXISTING_FORM_SOURCE_LABEL);
+                }
+                if (newVal != null) {
+                    mergeSourceLabel(sources, newVal, "本轮影像识别");
+                }
+            }
+            if (sources.size() < 2) {
+                continue;
+            }
+            List<String> values = new ArrayList<>(sources.keySet());
+            List<String> conflict = buildScalarConflictCluster(fieldKey, values);
+            List<String> options = conflict.size() >= 2 ? conflict : values;
+            if (options.size() < 2) {
+                continue;
+            }
+            patch.remove(fieldKey);
+            appendAmbiguity(extraction, scalarFieldAmbiguity(fieldKey, options, sources));
+            appendReplyHint(extraction);
+        }
+    }
+
+    private static boolean crossUploadScalarConflict(
+            Map<String, Object> existing, LinkedHashMap<String, Object> patch, String fieldKey) {
+        String existingVal = stringifyScalarForField(fieldKey, existing.get(fieldKey));
+        String newVal = stringifyScalarForField(fieldKey, patch.get(fieldKey));
+        if (existingVal == null || newVal == null) {
+            return false;
+        }
+        if (existingVal.equals(newVal)) {
+            return false;
+        }
+        if ("unifiedSocialCreditCode".equals(fieldKey)) {
+            return incompatibleUscc(existingVal, newVal);
+        }
+        return true;
+    }
+
+    private static List<String> buildScalarConflictCluster(String fieldKey, List<String> values) {
+        if ("unifiedSocialCreditCode".equals(fieldKey)) {
+            return buildUsccConflictCluster(values);
+        }
+        LinkedHashSet<String> inConflict = new LinkedHashSet<>();
+        for (int i = 0; i < values.size(); i++) {
+            for (int j = i + 1; j < values.size(); j++) {
+                String a = values.get(i);
+                String b = values.get(j);
+                if (a == null || b == null) {
+                    continue;
+                }
+                if (!normalizeScalar(a).equals(normalizeScalar(b))) {
+                    inConflict.add(a);
+                    inConflict.add(b);
+                }
+            }
+        }
+        return new ArrayList<>(inConflict);
+    }
+
+    private static String normalizeScalar(String s) {
+        return s.replace('\u3000', ' ').trim().replaceAll("\\s+", "");
+    }
+
+    private static String stringifyScalarForField(String fieldKey, Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof String s) {
+            String t = s.trim();
+            return t.isEmpty() ? null : t;
+        }
+        if ("registrationDate".equals(fieldKey) && v instanceof List<?> list && !list.isEmpty()) {
+            return String.valueOf(list.get(0)).trim();
+        }
+        return String.valueOf(v).trim();
+    }
+
+    private static void mergeSourceLabel(LinkedHashMap<String, String> map, String value, String label) {
+        if (value == null || value.isBlank() || label == null || label.isBlank()) {
+            return;
+        }
+        String v = value.trim();
+        map.merge(
+                v,
+                label,
+                (a, b) -> {
+                    if (a.contains(b) || b.contains(a)) {
+                        return a.length() >= b.length() ? a : b;
+                    }
+                    return a + " / " + b;
+                });
+    }
+
+    private static String sourceLabelFromRawKey(String rawKey) {
+        if (rawKey == null) {
+            return "本轮影像识别";
+        }
+        String k = rawKey.toLowerCase(Locale.ROOT);
+        if (k.contains("businesslicense") || k.contains("business_license")) {
+            return "营业执照";
+        }
+        if (k.contains("safety") || k.contains("hazard")) {
+            return "危险化学品经营许可证";
+        }
+        if (k.contains("transport")) {
+            return "道路危险货物运输许可证";
+        }
+        if (k.contains("idcard") || k.contains("identity")) {
+            return "身份证人像面";
+        }
+        return "本轮影像识别";
     }
 
     private static void stripAmbiguitiesForFieldKeys(FormVisionExtraction extraction, Set<String> fieldKeys) {
@@ -456,51 +675,37 @@ public final class FormVisionMultiEntityConflictDetector {
         return new ArrayList<>(extraction.ambiguities);
     }
 
-    private static AmbiguousFieldDto companyNameAmbiguity(List<String> names) {
+    private static AmbiguousFieldDto companyNameAmbiguity(
+            List<String> names, LinkedHashMap<String, String> valueToSource) {
         AmbiguousFieldDto a = new AmbiguousFieldDto();
         a.fieldKey = "companyName";
         a.questionForUser =
-                "多张证照上出现不同的「企业 / 业户名称」，无法自动确定表单「公司名称」应以哪一证为准；请任选其一。";
+                "当前表单与本轮影像中出现不同的「企业 / 业户名称」，无法自动确定「公司名称」应以哪一来源为准；请任选其一。";
         int i = 0;
         for (String n : names) {
             String id = "ent_" + (i++);
-            a.options.add(new AmbiguousOptionDto(id, "证照所示企业名称：" + n, n));
+            String src = valueToSource.getOrDefault(n, "证照 / 表单来源");
+            a.options.add(new AmbiguousOptionDto(id, src + "：" + truncateForOption(n), n));
         }
         return a;
     }
 
-    private static AmbiguousFieldDto usccAmbiguity(List<String> codes) {
+    private static AmbiguousFieldDto scalarFieldAmbiguity(
+            String fieldKey, List<String> values, LinkedHashMap<String, String> valueToSource) {
         AmbiguousFieldDto a = new AmbiguousFieldDto();
-        a.fieldKey = "unifiedSocialCreditCode";
+        a.fieldKey = fieldKey;
         a.questionForUser =
-                "多张证照上出现不同的统一社会信用代码（或含掩码与完整号码混排），无法自动确定应以哪一证为准；请任选其一。";
+                "「"
+                        + fieldLabelZh(fieldKey)
+                        + "」在已填报内容与本轮影像识别结果之间存在差异，请对照证面择一。";
         int i = 0;
-        for (String c : codes) {
-            String id = "uscc_" + (i++);
-            a.options.add(new AmbiguousOptionDto(id, "证照所示统一社会信用代码：" + c, c));
+        for (String v : values) {
+            String id = fieldKey + "_" + (i++);
+            String src = valueToSource.getOrDefault(v, "识别来源");
+            a.options.add(
+                    new AmbiguousOptionDto(
+                            id, src + "：" + truncateForOption(v), v));
         }
-        return a;
-    }
-
-    /**
-     * 多主体工商场景下 patch 已剔除统一码；若 OCR/模型仅收敛到一条号码，仍须用户显式「采用 / 清空」，避免与未选企业误绑。
-     */
-    private static AmbiguousFieldDto adoptOrClearUnifiedSocialCreditWhenMultiEnterpriseSingle(String code) {
-        String trimmed = code.trim();
-        AmbiguousFieldDto a = new AmbiguousFieldDto();
-        a.fieldKey = "unifiedSocialCreditCode";
-        a.questionForUser =
-                "已检出多张证照疑似分属不同主体，系统无法自动判定下述统一社会信用代码与哪一证严格对应；若与所选「公司名称」一致请点「采用」，否则请清空后按证面手填。";
-        a.options.add(
-                new AmbiguousOptionDto(
-                        "uscc_use",
-                        optionLabelUseRecognizedContent("unifiedSocialCreditCode", trimmed),
-                        trimmed));
-        a.options.add(
-                new AmbiguousOptionDto(
-                        "uscc_clear",
-                        optionLabelClearRecognizedField("unifiedSocialCreditCode"),
-                        CLEAR_FIELD_SENTINEL));
         return a;
     }
 

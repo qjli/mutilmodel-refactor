@@ -1,6 +1,17 @@
-# 复制本文件为项目根目录下的 application-local.yml（该文件名已在 .gitignore 中），再填入真实密钥。
-# Spring 会通过 spring.config.import 自动加载 application-local.yml。
+# 复制为 application-local.yml（已在 .gitignore），按需覆盖。
 dashscope:
   api-key: "在此填写 DashScope API Key"
-  # qwen-vl-max 请保持 false，否则百炼会报 thinking_budget 400
   vision-enable-thinking: false
+
+# AgentScope 会话：默认 redis；无 Redis 时可改为 file
+# agentscope:
+#   session:
+#     store: file
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # 若本地 Redis 启用了 requirepass，取消下一行注释：
+      # password: your-redis-password

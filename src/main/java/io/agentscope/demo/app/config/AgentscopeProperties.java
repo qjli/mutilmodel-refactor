@@ -4,26 +4,73 @@ import java.nio.file.Path;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 与 AgentScope 运行时相关的 Spring 配置（前缀 {@code agentscope.*}）。
+ * AgentScope 运行时配置（前缀 {@code agentscope.*}）。
  *
- * <p>当前仅承载会话持久化根目录；与 DashScope 密钥等无关。
+ * <p>会话持久化支持 {@code file}（{@link io.agentscope.core.session.JsonSession}）与
+ * {@code redis}（{@link io.agentscope.core.session.redis.RedisSession}）。
  */
 @ConfigurationProperties(prefix = "agentscope")
 public class AgentscopeProperties {
 
-    /** {@link io.agentscope.core.session.JsonSession} 在磁盘上的根目录（相对路径会基于进程工作目录解析）。 */
-    private String sessionRoot = "data/agentscope-sessions";
+    private SessionStore session = new SessionStore();
 
-    public String getSessionRoot() {
-        return sessionRoot;
+    public SessionStore getSession() {
+        return session;
     }
 
-    public void setSessionRoot(String sessionRoot) {
-        this.sessionRoot = sessionRoot;
+    public void setSession(SessionStore session) {
+        this.session = session != null ? session : new SessionStore();
     }
 
-    /** 规范化后的绝对路径，供创建目录与 {@link io.agentscope.core.session.JsonSession} 使用。 */
     public Path resolvedSessionRoot() {
-        return Path.of(sessionRoot).toAbsolutePath().normalize();
+        return Path.of(session.getFileRoot()).toAbsolutePath().normalize();
+    }
+
+    public String normalizedKeyPrefix() {
+        String p = session.getKeyPrefix();
+        if (p == null || p.isBlank()) {
+            p = "agentscope:multimodal-demo:";
+        }
+        p = p.trim();
+        return p.endsWith(":") ? p : p + ":";
+    }
+
+    public boolean isRedisSessionStore() {
+        return "redis".equalsIgnoreCase(session.getStore());
+    }
+
+    public boolean isFileSessionStore() {
+        return !isRedisSessionStore();
+    }
+
+    public static class SessionStore {
+
+        private String store = "redis";
+        private String keyPrefix = "agentscope:multimodal-demo:";
+        private String fileRoot = "data/agentscope-sessions";
+
+        public String getStore() {
+            return store;
+        }
+
+        public void setStore(String store) {
+            this.store = store;
+        }
+
+        public String getKeyPrefix() {
+            return keyPrefix;
+        }
+
+        public void setKeyPrefix(String keyPrefix) {
+            this.keyPrefix = keyPrefix;
+        }
+
+        public String getFileRoot() {
+            return fileRoot;
+        }
+
+        public void setFileRoot(String fileRoot) {
+            this.fileRoot = fileRoot;
+        }
     }
 }

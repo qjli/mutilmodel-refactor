@@ -6,15 +6,17 @@
 
 **工商主体**：`companyName`（禁止 enterpriseName/company_name）、`companyShortName`、`formerName`、`legalRepresentative`、`enterpriseNature`、`enterpriseType`、`businessScope`、`companyPhone`、`companyEmail`、`registrationDate`（ISO）、`registeredRegion`、`registeredAddressDetail`、`actualLocation`、`registeredZip`、`registeredCapital`、`companyFax`、`learnChannel`、`unifiedSocialCreditCode`、`qualificationIdDocType`、`qualificationIdDocNumber`（身份证公民身份号码）。
 
-**危化经营 / 安全生产类**（`safety*`）：`safetyAdminLicenseName`、`safetyLicenseNo`、`safetyLicenseValidityMode`（`fixed`|`long`）、`safetyLicenseValidityRange`（`fixed` 时为 `[start,end]` ISO 数组）、`safetyIssuingAuthority`、`safetyLegalRepresentative`（证面「主要负责人」也映射到此键）。
+**危化经营 / 安全生产类**（`safety*`）：`safetyAdminLicenseName`（**仅**证照标题 **危险化学品经营许可证**；禁止许可范围/品名如「天然气[富含甲烷的]…」）、`safetyLicenseNo`、`safetyLicenseValidityMode`（`fixed`|`long`）、`safetyLicenseValidityRange`（`fixed` 时为 `[start,end]` ISO 数组）、`safetyIssuingAuthority`、`safetyLegalRepresentative`（证面「主要负责人」也映射到此键）。证面「企业名称」→ `companyName`，**不得**写入 `safetyAdminLicenseName`。
 
-**道路危运**（`transport*`）：`transportAdminLicenseName`、`transportLicenseNo`、`transportLicenseValidityMode`、`transportLicenseValidityRange`、`transportIssuingAuthority`、`transportLegalRepresentative`。
+**道路危运**（`transport*`）：`transportAdminLicenseName`（**仅**证照标题 **道路危险货物运输许可证**；禁止「危险货物运输（×类×项）」等经营范围）、`transportLicenseNo`、`transportLicenseValidityMode`、`transportLicenseValidityRange`、`transportIssuingAuthority`、`transportLegalRepresentative`。证面「业户名称」→ `companyName`，**不得**写入 `transportAdminLicenseName`。
 
 原则：有把握才写入；读不清勿猜。勿自造 `issuingAuthority`、`issueDate`、`validityPeriodStart` 等未列键。
 
 ## 多主体歧义（强制）
 
-多张营业执照，或营业执照与许可证上**企业名称/业户名称**指向**不同主体**（非简称包含关系）时，对冲突键（含 `companyName`、`unifiedSocialCreditCode` 及两证不一致的工商单行字段）：
+多张营业执照，或营业执照与许可证上**企业名称/业户名称**指向**不同主体**（非简称包含关系）时；或**用户此前已在表单中填报**（如先上传营业执照填公司 A，再上传危化证/运输证识别出 B、C）时，对冲突键（含 `companyName`、`unifiedSocialCreditCode`、`legalRepresentative` 等）：
+
+宿主会将「当前表单已填内容」与本轮 `form_patch` 合并为歧义候选项（标签含 **已填报（当前表单）**、**危险化学品经营许可证**、**道路危险货物运输许可证** 等），须全部列出，不得只给本轮两个候选而遗漏已填报的 A。
 
 1. **不得**写入 `form_patch`；
 2. 在 `ambiguities` 中逐字段给出 `field_key`、`question_for_user`（中性）、`options`（`option_id`、`label` 标明证照来源、`suggested_value`）；

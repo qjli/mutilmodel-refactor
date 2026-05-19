@@ -60,13 +60,19 @@ public class FormVisionController {
     public SseEmitter visionFormStream(
             @PathVariable String sessionId,
             // 与前端 multipart 字段名一致；多图时 Spring 会捆成 List（顺序通常与表单字段顺序一致）
-            @RequestPart("files") List<MultipartFile> files) {
+            @RequestPart("files") List<MultipartFile> files,
+            @RequestPart(value = "formContext", required = false) String formContextJson) {
         int n = files == null ? 0 : files.size();
-        log.info("[vision-sse] accepted pathSessionId={} multipartPartCount={}", sessionId, n);
+        log.info(
+                "[vision-sse] accepted pathSessionId={} multipartPartCount={} formContextChars={}",
+                sessionId,
+                n,
+                formContextJson == null ? 0 : formContextJson.length());
         // 先创建连接对象并设置超时；此时尚未向客户端写任何事件，浏览器已拿到 HTTP 200 + text/event-stream
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         // 禁止在本方法内同步调用 runAnalysis：内部有 Flux.blockLast，会阻塞很久，拖死 Tomcat 线程
-        agentscopeTaskExecutor.execute(() -> formVisionStreamService.runAnalysis(sessionId, files, emitter));
+        agentscopeTaskExecutor.execute(
+                () -> formVisionStreamService.runAnalysis(sessionId, files, formContextJson, emitter));
         // 立即返回，长任务在后台跑；后续事件全部由 FormVisionStreamService 写入同一 emitter
         return emitter;
     }

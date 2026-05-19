@@ -347,29 +347,23 @@ export type VisionResultHostFlags = {
 };
 
 /**
- * 服务端已从 {@code form_patch} 剔除整族键时，前端仍保留旧 {@code Form} 状态；对「未出现在 patch 中的族内键」写入
- * {@code undefined} 以清空控件，避免与「需您确认」互斥。
+ * 服务端已从 {@code form_patch} 剔除歧义键时，前端仍保留旧 {@code Form} 状态；对「出现在 ambiguities 中且未在
+ * patch 里」的键写入 {@code undefined}，避免与「需您确认」互斥。不再按整族 enterprise/transport/safety 清空，
+ * 以免用户确认公司名称后其它已识别字段被误清。
  */
 export function augmentVisionFormPatchForHostClears(
   patch: Record<string, unknown>,
-  flags: VisionResultHostFlags,
+  _flags: VisionResultHostFlags,
+  ambiguityFieldKeys?: readonly string[],
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...patch };
-  const clearMissing = (keys: readonly string[]) => {
-    for (const k of keys) {
-      if (!Object.prototype.hasOwnProperty.call(out, k)) {
-        out[k] = undefined;
-      }
+  if (!ambiguityFieldKeys?.length) {
+    return out;
+  }
+  for (const k of ambiguityFieldKeys) {
+    if (k && !Object.prototype.hasOwnProperty.call(out, k)) {
+      out[k] = undefined;
     }
-  };
-  if (flags.multi_enterprise_conflict_applied) {
-    clearMissing(VISION_ENTERPRISE_FIELD_KEYS);
-  }
-  if (flags.multi_transport_conflict_applied) {
-    clearMissing(VISION_TRANSPORT_FIELD_KEYS);
-  }
-  if (flags.multi_safety_conflict_applied) {
-    clearMissing(VISION_SAFETY_FIELD_KEYS);
   }
   return out;
 }
@@ -476,15 +470,52 @@ async function consumeSseJson(
 /**
  * Upload multiple images; consumes Server-Sent Events with JSON `data:` frames.
  */
+/** 上传前右侧表单快照（JSON），供服务端与本轮识别结果合并歧义候选（如已填公司名 A + 新证 B/C）。 */
+export function serializeFormContextForVision(
+  formValues: Record<string, unknown>,
+): string {
+  const serializable: Record<string, unknown> = { ...formValues };
+  const rd = serializable.registrationDate;
+  if (rd != null && typeof rd === "object" && "toISOString" in (rd as object)) {
+    serializable.registrationDate = (rd as { toISOString: () => string }).toISOString();
+  }
+  for (const key of [
+    "safetyLicenseValidityRange",
+    "transportLicenseValidityRange",
+  ] as const) {
+    const val = serializable[key];
+    if (
+      Array.isArray(val) &&
+      val.length === 2 &&
+      val[0] != null &&
+      typeof val[0] === "object" &&
+      "toISOString" in (val[0] as object)
+    ) {
+      serializable[key] = [
+        (val[0] as { toISOString: () => string }).toISOString(),
+        (val[1] as { toISOString: () => string }).toISOString(),
+      ];
+    }
+  }
+  return JSON.stringify(serializable);
+}
+
 export async function postVisionFormStream(
   sessionId: string,
   files: File[],
   onEvent: (ev: VisionSseEvent) => void,
   signal?: AbortSignal,
+  formContextJson?: string,
 ): Promise<void> {
   const fd = new FormData();
   for (const f of files) {
     fd.append("files", f);
+  }
+  if (formContextJson && formContextJson.trim()) {
+    fd.append(
+      "formContext",
+      new Blob([formContextJson], { type: "application/json" }),
+    );
   }
   const res = await fetch(
     `${BASE}/api/sessions/${encodeURIComponent(sessionId)}/vision/form-stream`,
