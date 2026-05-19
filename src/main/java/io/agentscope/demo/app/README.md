@@ -1,9 +1,9 @@
 # `io.agentscope.demo.app` 模块说明
 
-本包为 **multimodal-demo** 的 Spring Boot 应用层：基于 **AgentScope**（`ReActAgent`、Skill、`JsonSession`）与 **阿里云 DashScope**（`qwen-max` / `qwen-vl-max`），对外提供 **会话内文本对话**、**多图表单视觉识别（SSE 流式）** 等 HTTP API，并与前端 Ant Design 表单字段（camelCase）对齐。
+本包为 **multimodal-demo** 的 Spring Boot 应用层：基于 **AgentScope**（`ReActAgent`、Skill、**`Session`**：默认 **Redis** / 可选 **JsonSession**）与 **DashScope**（`qwen-max` / `qwen3-vl-plus`），提供 **文本对话**、**多图视觉 SSE** 等 API，并与前端 camelCase 表单对齐。
 
-> 根入口类：`MultimodalDemoApplication`（扫描 `io.agentscope.demo` 全包）。  
-> 同仓库前端入口：`frontend/src/App.tsx`；视觉 SSE 消费：`frontend/src/api.ts`；样式：`frontend/src/App.css`。
+> 根 README：[../../../../README.md](../../../../README.md)；Session / Redis：[../../../../README-MEMORY-SESSION.md](../../../../README-MEMORY-SESSION.md)、[../../../../README-REDIS.md](../../../../README-REDIS.md)。  
+> 前端：`frontend/src/App.tsx`、`frontend/src/api.ts`。
 
 ---
 
@@ -12,7 +12,8 @@
 | 路径 | 职责 |
 |------|------|
 | `MultimodalDemoApplication.java` | Spring Boot 启动、启用调度、`ApplicationRunner` 打 `[boot]` 锚点日志 |
-| `config/` | Bean 与外部化配置：DashScope 模型、磁盘 `JsonSession`、SSE 用线程池、CORS 等 |
+| `config/` | DashScope 模型、Session redis/file 装配、SSE 线程池、CORS |
+| `session/` | `LazyInitializingSession`、coverage 持久化（Redis / 文件） |
 | `web/` | REST 控制器与统一异常；`web/dto/` 为请求/响应与结构化输出 DTO |
 | `service/` | 业务实现：视觉流、文本对话、（演示用）单文件假任务 |
 | `agent/` | 从 classpath 加载 `form_vision_fill` 与 `upload_guide_dialog` 技能，供视觉与文本链路注册到 `SkillBox` |

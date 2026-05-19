@@ -1,8 +1,15 @@
-# multimodal-demo（重构版）
+# multimodal-demo
 
 企业工商与资质类 **结构化表单** 演示应用：左侧 **AgentScope Java** 智能对话（含多图视觉流式识别），右侧 **Ant Design** 表单；模型输出经 **camelCase `form_patch`** 回填，支持 **多主体营业执照歧义** 与 **材料清单卡片**（`upload_guide`）。
 
 > 本目录为相对 `mutilmodel-old` 的重构副本，变更摘要见 [REFACTOR.md](REFACTOR.md)。技能正文已精简，材料卡由 `UploadGuideFactory` 服务端生成。
+
+**专题文档**
+
+| 文档 | 内容 |
+|------|------|
+| [README-MEMORY-SESSION.md](README-MEMORY-SESSION.md) | Memory vs Session、JsonSession / Redis、前端 localStorage 与 formContext 对照 |
+| [README-REDIS.md](README-REDIS.md) | Redis Session 架构、键结构、Lettuce 选型、本机数据样例与排查 |
 
 ---
 
@@ -37,71 +44,66 @@
 | **多图视觉识别** | 对话区底部上传多张图片；服务端 **SSE** 推送读取进度、推理片段、流式摘要文本，最后下发 **`result`** JSON（`form_patch`、`ambiguities`、`reply`）。 |
 | **歧义确认** | 多营业执照等不同主体冲突时，结构化 **`ambiguities`**；前端在表单上方展示选项，用户点选后再写入字段。 |
 | **材料清单卡** | 由 `upload_guide` 驱动；与 **技能** 及 **服务端意图/覆盖推断** 对齐（见下文）。 |
-| **会话持久化** | `JsonSession` 按 `sessionId` 落盘；文本 Agent 与视觉 Agent 可共用同一会话目录。 |
-| **材料覆盖推断** | 基于 **上传文件名关键词** 累计四类证照是否「出现过」，写入 `upload_material_coverage.json`，供后续「还缺什么」类追问与卡片对齐（**非**图像内容识别）。 |
+| **会话持久化** | 默认 **`store=redis`**（`RedisSession` + Lettuce）；无 Redis 时可 **`store=file`**（`JsonSession` 落盘）。文本与视觉 Agent 共用同一 `Session` Bean 与 `sessionId`。 |
+| **材料覆盖推断** | 基于 **上传文件名关键词** 累计四类证照是否「出现过」；`store=redis` 时写入 Redis 键 `coverage:{sessionId}`，`store=file` 时写入 `upload_material_coverage.json`（**非**图像内容识别）。 |
+| **多轮上传歧义** | 视觉请求可附带 **`formContext`**（当前表单 JSON）；多主体检测合并「已填报」与本轮识别结果，生成 `ambiguities`。 |
 
 ---
 
 ## 架构流程图
 
-下图从**用户浏览器 → Spring → AgentScope → DashScope → 磁盘会话**分层展示主要组件与调用关系（省略异常路径与 health 等次要端点）。
+下图从**用户浏览器 → Spring → AgentScope → DashScope → Session 存储（Redis 或磁盘）**分层展示主要组件（省略异常路径）。
 
 ```mermaid
 flowchart TB
   subgraph Browser["浏览器"]
     UI["App.tsx\n表单 · 对话 · 歧义 · 材料卡"]
-    FEAPI["api.ts\nHTTP / SSE 解析"]
+    FEAPI["api.ts\nHTTP / SSE · formContext"]
     UI <--> FEAPI
   end
 
   subgraph Spring["Spring Boot :8888"]
-    CH["ChatController\nPOST .../messages"]
-    VH["FormVisionController\nPOST .../vision/form-stream"]
-    Pool["agentscopeTaskExecutor\n异步执行视觉分析"]
+    CH["ChatController"]
+    VH["FormVisionController\nSSE"]
+    HC["HealthController"]
+    Pool["agentscopeTaskExecutor"]
     CH --> DCS["DemoChatService"]
-    VH --> Pool
-    Pool --> FVS["FormVisionStreamService"]
+    VH --> Pool --> FVS["FormVisionStreamService"]
   end
 
-  subgraph Agent["AgentScope 运行时"]
-    JA["JsonSession\n会话目录读写"]
-    AGc["ReActAgent · 文本\nqwen-max"]
-    AGv["ReActAgent · 视觉\nqwen3-vl-plus 流式"]
-    SBc["SkillBox\nform_vision_fill\n± upload_guide_dialog"]
-    SBv["SkillBox\n仅 form_vision_fill"]
-    AGc --> SBc
-    AGv --> SBv
-    AGc --> JA
-    AGv --> JA
+  subgraph Agent["AgentScope"]
+    SESS["Session Bean\nLazyInitializingSession\n→ RedisSession 或 JsonSession"]
+    AGc["ReActAgent 文本 qwen-max"]
+    AGv["ReActAgent 视觉 qwen3-vl-plus"]
+    AGc --> SESS
+    AGv --> SESS
   end
 
-  subgraph Cloud["阿里云 DashScope"]
-    DS1["qwen-max"]
-    DS2["qwen3-vl-plus"]
+  subgraph Store["持久化 store=redis 默认"]
+    R1["Redis: memory_messages:list\nagent_meta · _keys"]
+    R2["Redis: coverage:sessionId"]
   end
 
-  subgraph Disk["会话根 agentscope.session-root"]
-    DIR["sessionId/\nagent 状态等"]
-    COV["upload_material_coverage.json\n文件名推断四类覆盖"]
+  subgraph FileStore["store=file"]
+    F1["磁盘 sessionId/\nJsonSession 文件"]
+    F2["upload_material_coverage.json"]
   end
 
-  FEAPI -->|JSON| CH
-  FEAPI -->|SSE| VH
-  DCS --> AGc
-  FVS --> AGv
-  AGc --> DS1
-  AGv --> DS2
-  DCS --> Cov["UploadMaterialCoverageStore"]
-  FVS --> Cov
-  Cov --> COV
-  JA --> DIR
+  FEAPI --> CH & VH
+  DCS & FVS --> AGc & AGv
+  AGc & AGv --> DS["DashScope"]
+  DCS & FVS --> Cov["UploadMaterialCoverageStore"]
+  SESS --> R1
+  SESS --> F1
+  Cov --> R2
+  Cov --> F2
 ```
 
 **读图要点**
 
-- **文本**与**视觉**使用**不同** `DashScopeChatModel` Bean，互不影响推理参数。  
-- **视觉请求**在独立线程池执行，Servlet 线程只负责返回 `SseEmitter`。  
-- **`JsonSession`** 为单例 Bean，文本与视觉共用同一**会话根**；**`UploadMaterialCoverageStore`** 按 `sessionId` 读写覆盖文件，供聊天侧「仍缺文件」与视觉侧「每次上传合并文件名」共用。
+- **文本**与**视觉**使用**不同** `DashScopeChatModel` Bean。  
+- **视觉**在 **`agentscopeTaskExecutor`** 中异步执行；Controller 只返回 `SseEmitter`。  
+- **`Session`** 按 `agentscope.session.store` 装配；Redis 模式下 **Agent 状态**与 **coverage 侧车** 共用 `key-prefix`，但走不同客户端（Lettuce `RedisSession` vs Spring `StringRedisTemplate`）。详见 [README-REDIS.md](README-REDIS.md)。
 
 ---
 
@@ -132,7 +134,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  U[用户选择多文件 files] --> R[顺序读取 Multipart\n每读一张推 progress]
+  U[用户选择多文件 files\n+ 可选 formContext] --> R[顺序读取 Multipart\n每读一张推 progress]
   R --> M[mergeFromHints\n文件名 → coverage 累计]
   M --> I[推 progress infer]
   I --> S[ReActAgent.stream\nFormVisionExtraction]
@@ -140,12 +142,12 @@ flowchart TD
   T -->|否| FB[fallback agent.call]
   T -->|是| P[取 extraction]
   FB --> P
-  P --> Z[uploadGuide ← null\n丢弃模型材料卡]
-  Z --> N[FormVisionPatchNormalizer\n归一 form_patch 键]
-  N --> C[FormVisionMultiEntityConflictDetector\n多主体歧义]
-  C --> E[SSE result\nreply · formPatch · ambiguities · uploadGuide=null]
+  P --> Z[uploadGuide ← null]
+  Z --> N[FormVisionPatchNormalizer]
+  N --> C[MultiEntityConflictDetector\nraw + existingForm]
+  C --> E[SSE result]
   E --> Done[SSE done]
-  S --> JA[agent.saveTo JsonSession]
+  S --> SV[agent.saveTo Session\nRedis 或磁盘]
 ```
 
 ### 3. 表单回填与歧义交互（前端闭环）
@@ -175,8 +177,9 @@ flowchart LR
 |------|------|
 | **JDK** | 17（`pom.xml` → `java.version`） |
 | **Spring Boot** | 3.3.6 |
-| **AgentScope Java** | `agentscope` 及相关扩展 `1.0.12`（见 `pom.xml`） |
-| **DashScope** | 文本模型 **`qwen-max`**（非流式）；视觉 **`qwen3-vl-plus`**（流式），见 `DashScopeModelConfig` |
+| **AgentScope Java** | `agentscope`、`agentscope-extensions-session-redis` **1.0.12**（见 `pom.xml`） |
+| **Redis（默认会话）** | Spring Data Redis + Lettuce；可选本地 Redis（见 [README-REDIS.md](README-REDIS.md)） |
+| **DashScope** | 文本 **`qwen-max`**（非流式）；视觉 **`qwen3-vl-plus`**（流式），见 `DashScopeModelConfig` |
 | **前端** | React 18、TypeScript 5.6、Vite 6、Ant Design 5；开发端口 **5173**，构建产物输出到 `src/main/resources/static/` |
 | **Node（可选）** | `frontend-maven-plugin` 使用 Node **v20.18.0** / npm **10.8.2**（启用 `frontend` profile 时） |
 
@@ -197,7 +200,8 @@ multimodal-demo/
 │   ├── app/
 │   │   ├── MultimodalDemoApplication.java
 │   │   ├── agent/                   # SkillLoader、ChatIntents、AgentPrompts
-│   │   ├── config/                  # DashScope、Web CORS、异步线程池、Agentscope 会话根路径
+│   │   ├── config/                  # DashScope、CORS、异步线程池、Session redis/file 装配
+│   │   ├── session/                 # LazyInitializingSession、coverage 持久化 redis/file
 │   │   ├── service/
 │   │   │   ├── DemoChatService.java         # 文本对话 + 意图路由 + upload_guide 覆盖逻辑
 │   │   │   ├── FormVisionStreamService.java # 多图 SSE、patch 归一、多主体冲突检测、coverage 合并
@@ -212,10 +216,10 @@ multimodal-demo/
 │   │   ├── form_vision_fill.md      # 表单键、歧义、reply 章节骨架（不定义 upload_guide）
 │   │   └── upload_guide_dialog.md   # upload_guide 白名单与卡片文案规则（仅文本意图命中时加载）
 │   └── static/                      # `npm run build` 生成的前端静态资源（勿手改）
-└── data/agentscope-sessions/        # 默认会话根（可通过配置覆盖）；每会话子目录含 agent 状态、coverage 等
+└── data/agentscope-sessions/        # store=file 时的默认会话根；store=redis 时 Agent 状态在 Redis
 ```
 
-仓库中另有已注释的 `FileController` 等「单文件任务」演示代码，**当前主流程以 `FormVisionController` SSE 为准**。
+仓库中 **`FileController`** 已注释；主流程为 **`ChatController`** + **`FormVisionController` SSE**。
 
 ---
 
@@ -223,6 +227,7 @@ multimodal-demo/
 
 - **JDK 17**、**Maven 3.8+**
 - 有效 **DashScope API Key**（百炼 / 通义）
+- **默认 `store=redis`**：本地需可连 Redis（如 `localhost:6379`）；无 Redis 时设 **`AGENTSCOPE_SESSION_STORE=file`**
 - 前端开发可选：**Node 20+**、npm
 
 ---
@@ -236,8 +241,11 @@ multimodal-demo/
 | `server.port` | 默认 **8888** |
 | `spring.servlet.multipart.max-file-size` / `max-request-size` | 单文件 **50MB**、整请求 **55MB** |
 | `spring.config.import` | 可选加载同目录 **`application-local.yml`**（适合放密钥，勿提交 Git） |
-| `agentscope.session-root` | 会话目录，默认 `data/agentscope-sessions`；可用环境变量 **`AGENTSCOPE_SESSION_ROOT`** 覆盖 |
-| `dashscope.api-key` | API Key；**务必**用 **`DASHSCOPE_API_KEY`** 环境变量或 `application-local.yml` 覆盖仓库中的占位/示例值，**勿将真实密钥提交远程仓库** |
+| `agentscope.session.store` | **`redis`**（默认）或 **`file`**；环境变量 **`AGENTSCOPE_SESSION_STORE`** |
+| `agentscope.session.key-prefix` | Redis 键前缀，默认 `agentscope:multimodal-demo:` |
+| `agentscope.session.file-root` | `store=file` 时会话根目录，默认 `data/agentscope-sessions`；**`AGENTSCOPE_SESSION_ROOT`** |
+| `spring.data.redis.*` | `host` / `port` / `database`；密码用 **`application-local.yml`** 或 **`REDIS_PASSWORD`**（勿在默认 yml 写空 `password`） |
+| `dashscope.api-key` | API Key；**务必**用 **`DASHSCOPE_API_KEY`** 或 `application-local.yml` 覆盖，**勿提交真实密钥** |
 | `dashscope.vision-enable-thinking` | 视觉是否开启 extended thinking；`DashScopeProperties` 默认 `false`，仓库 `application.yml` 可能为 `true`（若遇 400 与 `thinking_budget` 相关，见[排错](#排错与注意事项)） |
 | `dashscope.vision-thinking-budget` | 正整数预算；可用 **`DASHSCOPE_VISION_THINKING_BUDGET`** 覆盖 |
 
@@ -248,14 +256,32 @@ multimodal-demo/
 ```yaml
 dashscope:
   api-key: sk-your-real-key
+  vision-enable-thinking: false   # 遇 400 与 thinking_budget 相关时关闭
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      password: "123456"          # 仅当 Redis 启用 requirepass 时
+
+# 无 Redis 时取消注释：
+# agentscope:
+#   session:
+#     store: file
 ```
 
-或仅使用环境变量：
+或环境变量：
 
 ```bash
 export DASHSCOPE_API_KEY=sk-your-real-key
-export AGENTSCOPE_SESSION_ROOT=/path/to/sessions   # 可选
+export REDIS_HOST=localhost
+export REDIS_PASSWORD=123456          # 有密码时
+export AGENTSCOPE_SESSION_STORE=redis # 或 file
 ```
+
+完整 Redis 说明见 [README-REDIS.md](README-REDIS.md)；示例文件见根目录 **`application-local.yml.example`**。
 
 ### 3. Vite 代理
 
@@ -306,9 +332,9 @@ mvn -q -Pfrontend spring-boot:run
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/health` | 存活探测，返回 `{"status":"UP"}` |
-| `POST` | `/api/sessions/{sessionId}/messages` | 文本对话；`Content-Type: application/json`，body 为 **`ChatRequest`**（字段 `content`：用户正文） |
-| `POST` | `/api/sessions/{sessionId}/vision/form-stream` | 多图视觉；`multipart/form-data`，重复字段名 **`files`**；响应 **`text/event-stream`**（SSE） |
+| `GET` | `/api/health` | 存活探测：`status`、`sessionStore`；`store=redis` 时含 `redis`（`UP` / `DOWN` / `DEGRADED`） |
+| `POST` | `/api/sessions/{sessionId}/messages` | 文本对话；JSON body **`ChatRequest`**（`content`） |
+| `POST` | `/api/sessions/{sessionId}/vision/form-stream` | 多图视觉 SSE；`multipart`：**`files`**（可重复）、可选 **`formContext`**（当前表单 JSON 字符串） |
 
 ### `POST .../messages` 响应体（`ChatResponse`）
 
@@ -350,8 +376,8 @@ mvn -q -Pfrontend spring-boot:run
 ### 共同基础
 
 - **`ReActAgent`** + **`SkillBox`** 注册 classpath 技能；结构化输出类型由路由区分（文本：`ChatFormAssistantResult`；视觉：`FormVisionExtraction`）。
-- **`JsonSession`**：`agent.loadIfExists` / `saveTo`，目录为 `{sessionRoot}/{sessionId}/`。  
-- 各核心类的**是否单例、为何这样拆、优缺点**见下节 **[AgentScope 核心类：生命周期与取舍](#agentscope-核心类生命周期与取舍)**。
+- **`Session`**（`RedisSession` 或 `JsonSession`）：`agent.loadIfExists` / `saveTo`；Redis 键结构见 [README-REDIS.md](README-REDIS.md)。  
+- 各核心类的**是否单例、为何这样拆**见下节 **[AgentScope 核心类：生命周期与取舍](#agentscope-核心类生命周期与取舍)**。
 
 ### 技能一：`form_vision_fill`（`src/main/resources/skills/form_vision_fill.md`）
 
@@ -379,8 +405,9 @@ mvn -q -Pfrontend spring-boot:run
 
 ### 视觉上传与覆盖文件
 
-- 每张图读完并取原始文件名列表后，调用 **`uploadMaterialCoverageStore.mergeFromHints(safeId, names)`**。
-- **`MaterialFilenameInference`** 从文件名推断四类 **`MaterialSampleIds`**，合并写入会话目录下 **`upload_material_coverage.json`**（与图像识别结果独立，仅作「是否上传过某类文件名」的弱信号）。
+- 每张图读完后 **`uploadMaterialCoverageStore.mergeFromHints(safeId, names)`**。
+- **`MaterialFilenameInference`** 推断四类 **`MaterialSampleIds`**，合并写入 coverage 侧车（Redis 或 `upload_material_coverage.json`），与 OCR 结果独立。
+- 可选 **`formContext`**：前端上传前序列化当前表单；**`FormVisionMultiEntityConflictDetector`** 将「已填报」与本轮 patch 一并参与歧义（标签含 **已填报（当前表单）**）。
 
 ---
 
@@ -395,7 +422,7 @@ flowchart LR
   subgraph Singleton["Spring 单例（进程级复用）"]
     M1["chatDashScopeChatModel\nqwen-max · 非流式"]
     M2["formVisionDashScopeChatModel\nqwen3-vl-plus · 流式"]
-    JS["JsonSession\n会话根目录"]
+    JS["Session Bean\nLazyInitializingSession\nredis 或 file"]
   end
 
   subgraph PerRequest["每请求 / 每轮新建"]
@@ -421,9 +448,9 @@ flowchart LR
 
 | 层次 | 含义 | 本项目做法 |
 |------|------|------------|
-| **基础设施单例** | 模型客户端、磁盘会话根 | `DashScopeChatModel` ×2、`JsonSession` 各 1 个 Spring Bean |
+| **基础设施单例** | 模型客户端、会话存储 | `DashScopeChatModel` ×2、`Session` Bean 1 个（内部 redis/file） |
 | **请求级 Agent** | 一轮 HTTP/SSE 对应一次推理上下文 | 每次 `chat` / `runAnalysis` **新建** `ReActAgent` + `InMemoryMemory` + `SkillBox` |
-| **跨请求状态** | 同一 `sessionId` 的多轮记忆 | 不靠长驻 Agent，靠 **`JsonSession` 落盘** + `loadIfExists` / `saveTo` |
+| **跨请求状态** | 同一 `sessionId` 的多轮记忆 | 不靠长驻 Agent，靠 **`Session` 持久化**（Redis 或磁盘）+ `loadIfExists` / `saveTo` |
 
 ### 核心类对照表
 
@@ -432,7 +459,7 @@ flowchart LR
 | **`DashScopeChatModel`** | `DashScopeModelConfig` → 注入 `DemoChatService` / `FormVisionStreamService` | **是**（2 个 Bean） | `chatDashScopeChatModel`：`qwen-max`、`stream=false`；`formVisionDashScopeChatModel`：`qwen3-vl-plus`、`stream=true`。构建时内嵌 `DashScopeChatFormatter`、`GenerateOptions`（视觉开思考时带 `thinkingBudget`）。 |
 | **`DashScopeChatFormatter`** | `DashScopeSupport` 构建 Model 时 | 随 Model **单例** | 不单独注册 Bean；与对应 Model 绑定，保证请求/响应格式一致。 |
 | **`GenerateOptions`** | `DashScopeSupport.visionModel(...)` | 随视觉 Model **单例** | 仅在 `vision-enable-thinking=true` 时设置 `thinkingBudget`；文本 Model 使用空 options。 |
-| **`JsonSession`** | `AgentscopeSessionConfig` Bean；两 Service 注入 | **是** | 指向 `agentscope.session-root`（默认 `data/agentscope-sessions`）。**无状态存储器**：按 `sessionId` 子目录读写，线程安全由「每请求独立 Agent + 串行 load/save」保证。 |
+| **`Session`** | `AgentscopeSessionConfiguration` 按 `store` 装配；两 Service 注入 | **是** | **redis**：`RedisSession` + Lettuce，键 `{keyPrefix}{sessionId}:…`；**file**：`JsonSession` + `file-root`。Redis 用 `LazyInitializingSession` 延迟首连。 |
 | **`ReActAgent`** | 每轮 `DemoChatService#chat`、`FormVisionStreamService#runAnalysis` | **否** | `ReActAgent.builder()...build()`；文本 `maxIters=8`，视觉 `maxIters=12`；`structuredOutputReminder(PROMPT)`。 |
 | **`InMemoryMemory`** | 同上，挂到 Agent | **否** | 每轮 **全新** 内存；历史来自 **`loadIfExists(jsonSession)`** 恢复的 Agent 状态，而非复用上一个 Java 堆里的 Memory 实例。 |
 | **`Toolkit`** | 构建 `SkillBox` 前 `new Toolkit()` | **否** | 每轮新建；当前技能以 Markdown 注入为主，工具调用面较窄。 |
@@ -449,7 +476,7 @@ flowchart LR
 | 类 | 单例 | 作用 |
 |----|------|------|
 | **`agentscopeTaskExecutor`**（`AgentscopeAsyncConfig`） | **是** | 视觉 SSE：Controller 立即返回 `SseEmitter`，`runAnalysis` 在线程池执行（内部 `Flux.blockLast`，禁止占 Servlet 线程）。 |
-| **`UploadMaterialCoverageStore`** | **是**（`@Component`） | 按 `sessionId` 写 `upload_material_coverage.json`；与 `JsonSession` 目录并列，**不**进入 AgentScope 会话格式。 |
+| **`UploadMaterialCoverageStore`** | **是**（`@Component`） | 按 `sessionId` 写 coverage 侧车（Redis 或文件）；**不**进入 AgentScope `memory_messages` 格式。 |
 
 ### 为何这样用（设计原因）
 
@@ -457,10 +484,10 @@ flowchart LR
    - 模型名、API Key、`stream`、是否开思考等属于**进程级配置**，构建成本高、无会话语义。  
    - 文本与视觉**拆两枚 Bean**：避免流式/非流式、不同 `modelName` 互相污染。
 
-2. **`JsonSession` 单例 + `ReActAgent` 每请求新建**  
-   - AgentScope 的持久化 API 是「**Agent 实例** + **Session 存储**」：`loadIfExists` / `saveTo` 把 ReAct 状态写入 `{sessionRoot}/{sessionId}/`。  
-   - 若 Agent 也做成单例，则并发请求同一 `sessionId` 会争用内存与工具状态；**每请求新建 Agent** 可把并发隔离开，仅靠磁盘会话合并历史。  
-   - 文本与视觉**共用同一 `JsonSession` Bean、同一 `sessionId` 目录**，因此同一浏览器会话里「先聊后传图」可共享 Agent 落盘状态（具体取决于框架序列化内容）。
+2. **`Session` 单例 + `ReActAgent` 每请求新建**  
+   - `loadIfExists` / `saveTo` 把 Agent 状态写入 Redis 或 `{fileRoot}/{sessionId}/`。  
+   - **每请求新建 Agent** 避免同 session 并发争用堆内状态；历史靠 Session 存储合并。  
+   - 文本与视觉**共用同一 `Session` Bean 与 `sessionId`**，可先对话后传图共享上下文。
 
 3. **`InMemoryMemory` 每轮新建**  
    - 视觉链路注释写明：**不要求跨轮对话记忆**，每轮 vision 用干净 memory，避免上一轮 OCR 残留干扰；持久化仍 `saveTo` 供后续文本轮次使用。  
@@ -490,8 +517,9 @@ flowchart LR
 | 缺点 / 风险 | 说明 |
 |-------------|------|
 | **每请求装配开销** | 每次 `new` Agent、Memory、Toolkit、读 classpath 技能 Markdown；高 QPS 时需关注 CPU 与类加载（可考虑缓存 `AgentSkill` 实例，当前未做）。 |
-| **Memory 与 Session 语义易混** | 「单例 JsonSession」≠「单例对话记忆」；记忆在磁盘，堆内 Memory 每轮为空壳 + load 恢复。 |
-| **同 session 并发写盘** | 多标签同时用同一 `sessionId` 调 `saveTo` 可能互相覆盖；演示场景通常单页单会话。 |
+| **Memory 与 Session 语义易混** | 见 [README-MEMORY-SESSION.md](README-MEMORY-SESSION.md)；堆内 `InMemoryMemory` 每轮新建，历史来自 Session。 |
+| **同 session 并发写入** | 多标签同 `sessionId` 并发 `saveTo` 可能覆盖；演示假设单页单会话。 |
+| **Redis 双连接** | AgentScope Lettuce 与 Spring `StringRedisTemplate` 可能各一条连接（见 [README-REDIS.md](README-REDIS.md) 选型说明）。 |
 | **阻塞在线程池** | 视觉 `blockLast(12min)`、文本 `block(3min)` 占 worker 线程；依赖有界池与 SSE 超时（30min）。 |
 | **双模型成本** | 文本、视觉各调一次 DashScope；无法靠「单 Agent 单例」合并调用。 |
 | **CLI 与 Web 不一致** | `demos/*` 在 `main` 中手写装配，**不**注入 Spring Bean；读代码时需区分入口。 |
@@ -510,7 +538,7 @@ flowchart LR
 | 主题 | 类 / 文件 |
 |------|-----------|
 | Model Bean | `DashScopeModelConfig`, `DashScopeSupport`, `DashScopeProperties` |
-| Session Bean | `AgentscopeSessionConfig`, `AgentscopeProperties` |
+| Session Bean | `AgentscopeSessionConfiguration`, `AgentscopeRedisSessionConfiguration`, `AgentscopeFileSessionConfiguration`, `AgentscopeProperties` |
 | 文本 Agent 装配 | `DemoChatService` |
 | 视觉 Agent 装配 + 流 | `FormVisionStreamService`, `FormVisionController` |
 | 技能封装 | `SkillLoader`, `ChatIntents`, `AgentPrompts` |
@@ -526,8 +554,8 @@ flowchart LR
    - 将模型输出的别名键、错误前缀键等映射到与前端 **`Form.Item` `name`** 一致的 **`CANONICAL_KEYS`** 白名单。  
    - 剔除白名单外字段，避免 `setFieldsValue` 静默丢键。
 
-2. **`FormVisionMultiEntityConflictDetector.apply`**  
-   - 在归一化 **之后** 执行；针对多证 **企业名称 / 统一社会信用代码** 等互斥信号，从 `form_patch` 中移除冲突键并填充 **`ambiguities`**，与技能 `form_vision_fill` 中的多主体规则一致。
+2. **`FormVisionMultiEntityConflictDetector.apply(extraction, raw, existingForm)`**  
+   - 在归一化 **之后** 执行；`existingForm` 来自 multipart **`formContext`**（经 `FormVisionFormContextSupport` 归一化）。多证互斥或「已填报 vs 本轮识别」不一致时，剔除相关 `form_patch` 键并填充 **`ambiguities`**。
 
 ---
 
@@ -556,7 +584,7 @@ UI 上缩略图叠加 **「样图」** 角标（见 `App.css`）。
 
 - **入口**：`frontend/src/main.tsx` → `App.tsx`。
 - **会话 id**：页面加载时用 **`crypto.randomUUID()`** 生成一次，整页生命周期内固定；API 路径均带该 id。表单草稿通过 **`localStorage`** 键前缀 `FORM_STORAGE_PREFIX + sessionId` 读写（见 `App.tsx`），**并非**把 sessionId 单独持久化为另一键名。
-- **视觉**：`postVisionFormStream` 使用 **`fetch` + `ReadableStream`** 解析 SSE；合并 `delta` 更新推理区与识别说明；`result` 后应用 `formPatch`、`ambiguities`，**忽略** `uploadGuide`（后端已为 null）。
+- **视觉**：`postVisionFormStream` 附带 **`formContext`**（当前表单快照）；SSE 解析 `progress` / `thinking` / `result`；`result` 后应用 `formPatch`、`ambiguities`；多主体时按 `ambiguities` 键清空表单字段（见 `api.ts`）。
 - **聊天**：`postJson` 调 `messages`；若有 `uploadGuide` 则经 `normalizeVisionUploadGuide` 后渲染 **`UploadGuideCardSection`**。
 
 ---
@@ -593,7 +621,12 @@ cd frontend && npm ci && npm run build
    Vite 已对 `text/event-stream` 响应设置 **`x-accel-buffering: no`** 等，仍异常时可直连 8888 对比。
 
 5. **材料卡与「仍缺」不一致**  
-   「还缺」类追问的卡片以 **`upload_material_coverage.json`**（文件名推断）为准，而非上一轮视觉模型口头描述。
+   「还缺」类追问以 **coverage 侧车**（Redis 或 `upload_material_coverage.json`，文件名推断）为准，而非模型口头描述。
+
+6. **Redis 连接失败**  
+   - 检查 `spring.data.redis` 与密码；`GET /api/health` 查看 `redis` 字段。  
+   - 临时无 Redis：`AGENTSCOPE_SESSION_STORE=file`。  
+   - 详见 [README-REDIS.md](README-REDIS.md)。
 
 ---
 
@@ -608,9 +641,10 @@ cd frontend && npm ci && npm run build
 | Patch / 歧义 | `FormVisionPatchNormalizer`, `FormVisionMultiEntityConflictDetector` |
 | 覆盖与材料卡 | `UploadMaterialCoverageStore`, `MaterialFilenameInference`, `UploadGuideFactory`, `MaterialSampleIds` |
 | 模型 Bean | `DashScopeModelConfig`, `DashScopeProperties` |
-| 会话路径 | `AgentscopeProperties`、`AgentscopeSessionConfig`（注册 `JsonSession`、启动时创建会话根目录） |
+| 会话 / Redis | `AgentscopeProperties`、`AgentscopeSessionConfiguration`、[README-REDIS.md](README-REDIS.md)、[README-MEMORY-SESSION.md](README-MEMORY-SESSION.md) |
+| formContext | `FormVisionFormContextSupport`、`FormVisionController`、`frontend/src/api.ts` |
 | AgentScope 生命周期 | 见上文 **[AgentScope 核心类：生命周期与取舍](#agentscope-核心类生命周期与取舍)** |
 
 ---
 
-维护 README 时，若行为与代码不一致，**以 Java / TypeScript / `application.yml` 为准**，并同步更新本表与各节描述。
+维护 README 时，若行为与代码不一致，**以 Java / TypeScript / `application.yml` 为准**，并同步专题文档与本表。
