@@ -185,6 +185,26 @@ sequenceDiagram
 
 服务层 **`new InMemoryMemory()`** 并 `ReActAgent.builder()...build()`，按用户意图注册 Skill、拼接 systemPrompt 等。此时 JVM 里的 Memory **是空的**，上一轮对话并不自动留在堆中——这是有意设计，避免多请求共享可变 Agent 状态。
 
+**通俗解释：为什么不共用一个长期存活的 Agent？**
+
+可以把 **Agent + InMemoryMemory** 想成服务员手里的一张**工作单**：上面记着「正在进行的对话、刚调用的工具、写到一半的推理」。如果整个应用只 new 一次 Agent，所有用户的请求都往**同一张工作单**上写，会出现：
+
+| 若全局共用一个 Agent | 会发生什么 |
+|----------------------|------------|
+| 用户甲正在聊 | 工作单上是甲的消息 |
+| 用户乙同时发请求 | 乙的内容也写进**同一张**工作单，或把甲未保存的内容打乱 |
+| 工具 / Skill 状态 | 甲刚加载的技能、迭代次数，可能被乙的请求改掉 |
+| 结果 | 串话、丢消息、甚至把甲的对话存进乙的 `sessionId` |
+
+因此本项目采用：**每个 HTTP 请求领一张新的空白工作单**（`new ReActAgent` + `new InMemoryMemory`），用完即丢；需要「上次聊到哪了」时，不依赖上一张工作单还在内存里，而是按 `sessionId` 从 **Redis 档案柜**里复印一份历史（`loadIfExists`），聊完再把整张工作单归档回去（`saveTo`）。
+
+```text
+错误做法：全店共用一个 Agent 实例  →  多人同时改一本活页本
+正确做法：每单新建 Agent，按 sessionId 从 Redis 读/写  →  每人一本复印稿，写完锁进同一抽屉
+```
+
+所以「Memory 每轮是空的」并不可怕：**空的是本请求的临时草稿；连续性由 Redis 里的 `memory_messages:list` 保证**。你在浏览器里用同一个 `sessionId` 多轮聊天，感觉像在连续对话，是因为每轮都会先 **load** 再 **save**，而不是因为服务器上一直留着同一个 Agent 对象。
+
 #### 阶段三：从 Redis 恢复历史（loadIfExists）
 
 调用 **`agent.loadIfExists(agentscopeSession, safeId)`**：
@@ -304,6 +324,15 @@ Spring 启动 → 注册 LazyInitializingSession（内部 delegate=null）
 | 并发同 session 两请求 | 后写的 `saveTo` 可能覆盖先写（产品假设单页单会话） |
 
 **口诀**：**Agent 每请求新建，状态在 Redis 里按 sessionId 续命。**
+
+**和「单例 Agent」对比（帮助记忆）**
+
+| | 全局单例 Agent | 每请求新建 Agent（本项目） |
+|--|----------------|---------------------------|
+| 对话存在哪 | 主要在 JVM 堆，难多机共享 | 主要在 **Redis**，堆里只是临时副本 |
+| 并发安全 | 差，要加锁且仍易串状态 | 较好，每个请求独立对象 |
+| 重启服务 | 未 save 的堆内状态会丢 | 已 `saveTo` 的在 Redis 里仍在 |
+| 代价 | 看似省对象创建 | 每轮装配 Agent、读 jar 技能（可接受） |
 
 ### 4.7 和 coverage 侧车的边界
 
