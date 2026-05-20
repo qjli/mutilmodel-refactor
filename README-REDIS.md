@@ -4,6 +4,8 @@
 
 与 Memory / Session 概念总览见 [README-MEMORY-SESSION.md](./README-MEMORY-SESSION.md)；Redis 章节仅作摘要，细节以本文为准。
 
+**持久化原理（saveTo → RedisSession → 键结构）** 见 [第四章](#四session-持久化到-redis-的原理)。
+
 ---
 
 ## 一、为什么要用 Redis Session
@@ -116,9 +118,150 @@ HTTP 请求携带 sessionId
 
 ---
 
-## 四、配置说明
+## 四、Session 持久化到 Redis 的原理
 
-### 4.1 应用配置（`application.yml`）
+本节说明 **本项目中** Agent 对话状态如何进入 Redis：从 HTTP 请求到 `RedisSession` 写键，以及和 `JsonSession` 磁盘版的对应关系。
+
+### 4.1 分层：谁负责什么
+
+| 层次 | 组件 | 职责 |
+|------|------|------|
+| **业务** | `DemoChatService` / `FormVisionStreamService` | 每请求 `new ReActAgent` + `InMemoryMemory`，结束时 `saveTo` / 开始时 `loadIfExists` |
+| **Agent 框架** | `ReActAgent` | 把自身注册的 **StateModule**（Memory、Toolkit 等）序列化交给 `Session` |
+| **存储抽象** | `Session` 接口 | `save` / `get` / `getList`，不关心 Redis 还是文件 |
+| **本项目包装** | `LazyInitializingSession` | 首次 `load/save` 时才创建底层 `RedisSession` |
+| **Redis 实现** | `RedisSession` + `LettuceClientAdapter` | JSON 写入 STRING/LIST，维护 `: _keys` 索引 |
+| **Spring 装配** | `AgentscopeRedisSessionConfiguration` | `RedisClient` Bean、`keyPrefix`、条件 `store=redis` |
+
+**不经过 Session 的数据**（勿与下文混淆）：证照 **coverage 侧车**（`StringRedisTemplate` 写 `coverage:{sessionId}`）、前端 **localStorage**、当次 **formContext**。
+
+### 4.2 一次 HTTP 请求的完整链路
+
+```mermaid
+sequenceDiagram
+    participant FE as 前端 sessionId
+    participant SVC as DemoChatService
+    participant AG as ReActAgent
+    participant MEM as InMemoryMemory
+    participant LAZY as LazyInitializingSession
+    participant RS as RedisSession
+    participant R as Redis
+
+    FE->>SVC: POST .../messages
+    SVC->>SVC: SessionIds.requireSafeSessionId
+    SVC->>AG: builder + new InMemoryMemory
+    SVC->>AG: loadIfExists(session, safeId)
+    AG->>LAZY: memory.loadFrom / agent_meta...
+    LAZY->>RS: get / getList
+    RS->>R: GET STRING / LRANGE LIST
+    R-->>MEM: 历史 Msg 列表
+    SVC->>AG: call(userMsg)
+    AG->>MEM: addMessage(assistant...)
+    SVC->>AG: saveTo(session, safeId)
+    AG->>LAZY: agent_meta + memory_messages + toolkit...
+    LAZY->>RS: save / save(list)
+    RS->>R: SET / RPUSH / SADD _keys
+```
+
+视觉 SSE 链路相同：`FormVisionStreamService` 在流式推理结束后同样调用 `agent.saveTo(agentscopeSession, safeId)`。
+
+### 4.3 `saveTo` 写了哪些 state（ReActAgent）
+
+`ReActAgent.saveTo` 按模块拆分写入（见 AgentScope 源码），对应 Redis 键如下（`{prefix}` = `agentscope:multimodal-demo:`）：
+
+| state 键名 | Redis 结构 | 内容 |
+|------------|------------|------|
+| `agent_meta` | STRING（JSON） | Agent id、name、description、**当前 systemPrompt** |
+| `memory_messages` | LIST + `:list:_hash` | 短期记忆：每条一个 **Msg** JSON（`memory_messages:list`） |
+| `toolkit_activeGroups` | STRING（JSON） | 工具组激活状态，如 `skill-build-in-tools` |
+| （若启用 Plan） | STRING / LIST | 计划本状态；本 demo 通常未用 |
+
+`InMemoryMemory.saveTo` 调用：
+
+```java
+session.save(sessionKey, "memory_messages", new ArrayList<>(messages));
+```
+
+`RedisSession` 对 **List 型 state** 使用 `memory_messages:list` 存元素，并用 **hash** 做增量追加（见下节）。
+
+同时向 **`{prefix}{sessionId}:_keys`**（SET）登记 `agent_meta`、`memory_messages:list`、`toolkit_activeGroups` 等，便于 `delete(sessionId)` 时整会话清理。
+
+### 4.4 `RedisSession` 落盘规则（官方扩展）
+
+**单值 state**（如 `agent_meta`）：
+
+1. `JsonUtils` 将 `State` 对象序列化为 JSON 字符串。  
+2. `SET {prefix}{sessionId}:{stateKey}`。  
+3. `SADD {prefix}{sessionId}:_keys` 记录 state 名。
+
+**列表 state**（如 `memory_messages`）：
+
+1. 计算当前消息列表的 **hash**（`ListHashUtil`）。  
+2. 与 Redis 中 `memory_messages:list:_hash` 比较；  
+   - **hash 变或长度变**：可能 **整表重写**（`DEL` list 后逐条 `RPUSH`），或 **仅追加** 新增尾部 Msg（增量优化）。  
+3. 更新 `:list:_hash`；在 `_keys` 中登记 `memory_messages:list`。
+
+**读取**（`loadIfExists` / `loadFrom`）：
+
+- 单值：`GET` → 反序列化。  
+- 列表：`LRANGE 0 -1` → 每条 JSON 反序列化为 `Msg` → 填入 `InMemoryMemory`。
+
+因此磁盘上的 `memory_messages.jsonl` 与 Redis 的 `memory_messages:list` **语义相同**（一行/一条 Msg），**物理格式不同**。
+
+### 4.5 本项目特有的装配细节
+
+**1. 条件装配**
+
+- `agentscope.session.store=redis` → `AgentscopeRedisSessionConfiguration` 生效，`AgentscopeFileSessionConfiguration` 不注册 `Session` Bean。  
+- `store=file` 时相反，使用 `JsonSession`。
+
+**2. Lettuce 独立客户端**
+
+```text
+spring.data.redis.*  →  RedisURI  →  RedisClient.create(uri)
+                              →  RedisSession.builder().lettuceClient(...).keyPrefix(...).build()
+```
+
+与 Spring `RedisConnectionFactory`（coverage、health）**可并存两条连接**，配置来源相同。
+
+**3. 延迟连接**
+
+```text
+Spring 启动 → 注册 LazyInitializingSession（内部 delegate=null）
+第一次 loadIfExists / saveTo → synchronized 创建 RedisSession → 打日志 initializing redis session
+```
+
+避免 Redis 未启动时应用无法拉起；首次对话略慢。
+
+**4. sessionId 安全**
+
+`SessionIds.requireSafeSessionId` 限制字符集与长度，使 `sessionId` 只能作为 Redis 键的一段，避免注入异常键名。
+
+### 4.6 与「每请求新建 Agent」如何配合
+
+| 现象 | 原理 |
+|------|------|
+| 每轮 HTTP 都 `new InMemoryMemory()` | 堆内记忆是空的；**历史来自 Redis** 的 `loadIfExists` |
+| 同一 `sessionId` 多轮可接续 | 靠 **同一 Redis 键空间** 反复 `saveTo` 覆盖/追加 |
+| 多实例共享会话 | 任意 Pod 连同一 Redis + 同一 `key-prefix` + 同一 `sessionId` 即可 `load` |
+| 并发同 session 两请求 | 后写的 `saveTo` 可能覆盖先写（产品假设单页单会话） |
+
+**口诀**：**Agent 每请求新建，状态在 Redis 里按 sessionId 续命。**
+
+### 4.7 和 coverage 侧车的边界
+
+| | AgentScope Session | coverage 侧车 |
+|--|-------------------|---------------|
+| 写入 API | `agent.saveTo` → `RedisSession.save` | `UploadMaterialCoverageStore.mergeFromHints` |
+| Redis 键 | `{prefix}{sessionId}:memory_messages:list` 等 | `{prefix}coverage:{sessionId}` |
+| 内容 | 对话 Msg、Agent 元数据 | `["BUSINESS_LICENSE", ...]` |
+| 是否给 LLM | 是（load 进 Memory） | 否（仅业务规则 / systemPrompt 注入） |
+
+---
+
+## 五、配置说明
+
+### 5.1 应用配置（`application.yml`）
 
 ```yaml
 agentscope:
@@ -136,7 +279,7 @@ spring:
       # password 勿在默认 yml 写空字符串，否则 NOAUTH 行为异常
 ```
 
-### 4.2 本地 Redis（你的环境）
+### 5.2 本地 Redis（你的环境）
 
 在 `application-local.yml`（参考 `application-local.yml.example`）中配置：
 
@@ -160,7 +303,7 @@ export REDIS_PASSWORD=123456
 export AGENTSCOPE_SESSION_STORE=redis
 ```
 
-### 4.3 健康检查
+### 5.3 健康检查
 
 ```bash
 curl -s http://localhost:8888/api/health | jq .
@@ -178,7 +321,7 @@ curl -s http://localhost:8888/api/health | jq .
 
 Redis 不可达时 `status` 为 `DEGRADED`，`redis` 为 `DOWN`。
 
-### 4.4 无 Redis 时回退
+### 5.4 无 Redis 时回退
 
 ```yaml
 agentscope:
@@ -190,7 +333,7 @@ agentscope:
 
 ---
 
-## 五、键命名规范
+## 六、键命名规范
 
 默认前缀：`agentscope:multimodal-demo:`（`AgentscopeProperties.normalizedKeyPrefix()` 保证末尾有 `:`）
 
@@ -215,9 +358,9 @@ agentscope:
 
 ---
 
-## 六、各键数据结构详解
+## 七、各键数据结构详解
 
-### 6.1 `_keys`（SET）
+### 7.1 `_keys`（SET）
 
 成员示例（本机实测）：
 
@@ -229,7 +372,7 @@ toolkit_activeGroups
 
 表示当前 session 在 Redis 中注册了哪些 **state 键名**（不含前缀与 sessionId）。`RedisSession.delete(sessionId)` 时会据此清理。
 
-### 6.2 `agent_meta`（STRING → JSON）
+### 7.2 `agent_meta`（STRING → JSON）
 
 结构（字段随 Agent 构建方式略有差异）：
 
@@ -245,7 +388,7 @@ toolkit_activeGroups
 - 保存 **Agent 身份与 systemPrompt**（含动态注入的「本会话材料覆盖推断」等）。
 - **不是**用户可见的聊天正文；正文在 `memory_messages:list`。
 
-### 6.3 `memory_messages:list`（LIST → 每元素一条 Msg JSON）
+### 7.3 `memory_messages:list`（LIST → 每元素一条 Msg JSON）
 
 AgentScope 将 `InMemoryMemory` 中的消息序列化为 **AgentScope `Msg` 的 JSON**，与官方 `JsonSession` 的 jsonl 行格式一致，只是存储介质改为 Redis List。
 
@@ -269,11 +412,11 @@ AgentScope 将 `InMemoryMemory` 中的消息序列化为 **AgentScope `Msg` 的 
 | `thinking` | 模型思考链（开启 vision thinking 时） |
 | `tool_use` / `tool_result` | ReAct 工具调用与结果（如 `load_skill_through_path`） |
 
-### 6.4 `memory_messages:list:_hash`（STRING）
+### 7.4 `memory_messages:list:_hash`（STRING）
 
 本机值示例：`a0106fcd`（短哈希）。用于检测消息列表是否变化，避免无效读写（RedisSession 内部机制）。
 
-### 6.5 `toolkit_activeGroups`（STRING → JSON）
+### 7.5 `toolkit_activeGroups`（STRING → JSON）
 
 ```json
 {
@@ -283,7 +426,7 @@ AgentScope 将 `InMemoryMemory` 中的消息序列化为 **AgentScope `Msg` 的 
 
 记录 Agent 工具包中当前激活的分组。
 
-### 6.6 `coverage:{sessionId}`（STRING → JSON 数组）
+### 7.6 `coverage:{sessionId}`（STRING → JSON 数组）
 
 **本项目独有**，不由 `RedisSession` 写入，由 `RedisMaterialCoveragePersistence` 维护：
 
@@ -297,7 +440,7 @@ AgentScope 将 `InMemoryMemory` 中的消息序列化为 **AgentScope `Msg` 的 
 
 ---
 
-## 七、本机 Redis 实况（2026-05-19 采样）
+## 八、本机 Redis 实况（2026-05-19 采样）
 
 连接：`localhost:6379`，`SELECT 0`，密码 `123456`。
 
@@ -314,7 +457,7 @@ KEY_COUNT agentscope:multimodal-demo:*  →  6
 | string | `...:toolkit_activeGroups` |
 | string | `agentscope:multimodal-demo:coverage:5b12a0f4-0c15-4500-be60-76042d95c825` |
 
-### 7.1 七条消息轮次摘要
+### 8.1 七条消息轮次摘要
 
 | 索引 | role | name | 内容要点 |
 |------|------|------|----------|
@@ -326,16 +469,16 @@ KEY_COUNT agentscope:multimodal-demo:*  →  6
 | 5 | ASSISTANT | ConsoleChatAgent | 追问仍缺材料（身份证、危运证、危化证） |
 | 6 | ASSISTANT | generate_response | JSON：`form_patch:{}`，`upload_guide:null`，reply 与缺项说明 |
 
-### 7.2 coverage 与 agent_meta 的一致性
+### 8.2 coverage 与 agent_meta 的一致性
 
 - `coverage` = `["BUSINESS_LICENSE"]` → 与 agent_meta 中 systemPrompt「已出现：营业执照」一致。
 - 未出现：`ID_CARD_FRONT`、危运证、危化证等（与 reply 缺项列表一致）。
 
 ---
 
-## 八、本地排查命令
+## 九、本地排查命令
 
-### 8.1 redis-cli（若已安装）
+### 9.1 redis-cli（若已安装）
 
 ```bash
 redis-cli -h localhost -p 6379 -a 123456 -n 0 --no-auth-warning PING
@@ -353,7 +496,7 @@ redis-cli -h localhost -p 6379 -a 123456 -n 0 --no-auth-warning \
   GET "agentscope:multimodal-demo:coverage:<sessionId>"
 ```
 
-### 8.2 Python（本仓库文档编写时环境无 redis-cli，使用 redis-py）
+### 9.2 Python（本仓库文档编写时环境无 redis-cli，使用 redis-py）
 
 ```bash
 pip install redis
@@ -378,7 +521,7 @@ print(json.dumps(msg, ensure_ascii=False, indent=2))
 
 ---
 
-## 九、依赖与代码索引
+## 十、依赖与代码索引
 
 | Maven 依赖 | 作用 |
 |------------|------|
@@ -398,7 +541,7 @@ print(json.dumps(msg, ensure_ascii=False, indent=2))
 
 ---
 
-## 十、运维与迁移注意
+## 十一、运维与迁移注意
 
 1. **键前缀隔离**：多环境共用同一 Redis 时，务必区分 `AGENTSCOPE_SESSION_KEY_PREFIX`（如 `agentscope:multimodal-demo:dev:`）。
 2. **大 value**：含证照 base64 的 USER 消息会显著增大 Redis 内存；必要时可评估是否仅存 URL/OSS 路径（需改业务与 Msg 构造）。
@@ -410,7 +553,7 @@ print(json.dumps(msg, ensure_ascii=False, indent=2))
 
 ---
 
-## 十一、与 README-MEMORY-SESSION 的关系
+## 十二、与 README-MEMORY-SESSION 的关系
 
 | 文档 | 内容 |
 |------|------|
