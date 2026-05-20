@@ -218,34 +218,106 @@ Jackson 默认 camelCase 序列化（`formPatch`）；技能 JSON 使用 snake_c
 
 ---
 
-## 七、扩展指南：新增一个表单字段
+## 七、现有字段逐键对照表
 
-假设新增字段 **`taxRegistrationNo`（税务登记号）**，主要来自营业执照。
+下列 **32 个** `form_patch` 键与 `FormVisionPatchNormalizer.CANONICAL_KEYS`、`App.tsx` 的 `Form.Item name` 一一对应。改字段或排查「模型有值、表单无值」时，先在本表定位该键，再对照归一化与歧义列。
 
-### 7.1 检查清单（按顺序）
+### 7.0 图例（多主体 / 歧义列）
 
-| # | 位置 | 操作 |
-|---|------|------|
-| 1 | `skills/form_vision_fill.md` | 在「工商主体」或合适小节增加 `taxRegistrationNo` 说明；写清禁止使用的别名 |
-| 2 | `FormVisionPatchNormalizer.java` | 将 `taxRegistrationNo` 加入 **`CANONICAL_KEYS`**；必要时在 `static {}` 增加 **alias**（如 `taxNo` → `taxRegistrationNo`） |
-| 3 | `FormVisionMultiEntityConflictDetector.java` | 若属工商歧义族：加入 `ENTERPRISE_BASIC_KEYS` 或 `ENTERPRISE_CROSS_UPLOAD_KEYS`；若多证同键冲突需单独收集逻辑 |
-| 4 | `frontend/src/App.tsx` | `FormValues` 类型 + 对应 **`Form.Item name="taxRegistrationNo"`** |
-| 5 | `frontend/src/api.ts` | 若参与整族清空：加入 `VISION_ENTERPRISE_FIELD_KEYS`（与后端列表一致） |
-| 6 | 自测 | 上传含该字段的证照图 → 看 SSE `result.formPatch` → 表单是否显示 |
+| 标记 | 含义 | 后端常量 / 行为 |
+|------|------|-----------------|
+| **◆** | 多张营业执照等多主体时，**整族工商键**从 patch 剔除并可能逐项歧义 | `ENTERPRISE_BASIC_KEYS`；前端 `VISION_ENTERPRISE_FIELD_KEYS` 整族清空 |
+| **◇** | 多主体时 **仅从 patch 剔除**（常出现在 `ambiguities`），其余工商键可继续自动回填 | `ENTERPRISE_AMBIGUITY_KEYS`：`companyName`、`companyShortName`、`unifiedSocialCreditCode` |
+| **○** | 多轮上传：与 **formContext 已填报** 或本轮识别不一致时，**逐项**歧义（不单清整族） | `ENTERPRISE_CROSS_UPLOAD_KEYS` |
+| **▲** | 多张危化证 / 多证号等：运输或危化 **整族** 处理 | `TRANSPORT_PERMIT_KEYS` / `SAFETY_PERMIT_KEYS` |
+| **—** | 不参与上述族级规则；仍可由模型单独写入 `ambiguities` | — |
 
-### 7.2 原则
+**证面映射（技能强制，后端 `correctAdminLicenseNames` 兜底）**
 
-- **单一事实来源**：camelCase 名以 **`Form.Item name`** 为准，技能与后端白名单与之对齐。
-- **先白名单、后 UI**：后端丢弃未知键时，前端即使有表单项也收不到值。
-- **日期/枚举**：前端 `normalizeVisionFormPatch` 需能解析类型（dayjs、Radio 值等）。
+| 证面字样 | 应写入键 | 禁止写入 |
+|----------|----------|----------|
+| 营业执照「名称」 | `companyName` | `enterpriseName`、`businessName`（前端歧义别名会转到 `companyName`） |
+| 危化证「企业名称」 | `companyName` | `safetyAdminLicenseName` |
+| 危化证「主要负责人」 | `safetyLegalRepresentative` | 经营范围 → `businessScope`（勿写入证名键） |
+| 运输证「业户名称」 | `companyName` | `transportAdminLicenseName` |
+| 身份证「公民身份号码」 | `qualificationIdDocNumber` | 有号码无类型时后端默认 `qualificationIdDocType` = `身份证` |
 
-### 7.3 不必改（常见误区）
+---
 
-| 不必改 | 原因 |
-|--------|------|
-| `FormVisionExtraction.java` | 通用 Map，无逐字段定义 |
-| `FormVisionStreamService` | 除非要改 SSE 协议或模型提示拼接 |
-| Redis Session 键 | 与表单字段无直接对应 |
+### 7.1 企业基本信息（工商主体）
+
+| `form_patch` 键 | 表单标签 | 主要证照来源 | 值类型 / 格式 | 归一化与别名（摘要） | 多主体 / 歧义 |
+|-----------------|----------|--------------|---------------|----------------------|---------------|
+| `companyName` | 公司名称 | 营业执照「名称」；危化/运输证「企业名称」「业户名称」 | 字符串 | `enterpriseName`、`businessName`、`company_name`、`businessLicenseName`、`safetyCompanyName`、`transportCompanyName` 等 → 本键 | **◆ ◇ ○** |
+| `companyShortName` | 公司简称 | 营业执照（若有）；常需用户简称 | 字符串 | 无专用别名 | **◆ ◇** |
+| `formerName` | 公司曾用名 | 营业执照 | 字符串 | — | **◆ ○** |
+| `legalRepresentative` | 法定代表人（工商证照） | 营业执照「法定代表人」 | 字符串 | `legalRep`、`businessLicenseLegalRepresentative` | **◆ ○** |
+| `enterpriseType` | 企业类型 | 营业执照「类型」 | 字符串；前端 Select：`有限责任公司` / `股份有限公司` / `外商投资企业` | `type`、`companyType`、`businessLicenseType` | **◆ ○** |
+| `enterpriseNature` | 企业性质 | 营业执照或登记信息 | 字符串；前端 Select：`国有` / `民营` / `混合所有制` | — | **◆ ○** |
+| `registrationDate` | 注册日期 | 营业执照「成立日期」等 | ISO `yyyy-MM-dd`；前端 `dayjs` | `establishmentDate`、`foundingDate`、`businessLicenseEstablishmentDate`；支持中文「年月日」 | **◆ ○**；歧义点选需能解析 ISO |
+| `registeredCapital` | 注册资本(万元) | 营业执照 | 字符串（含「万元」可原样） | `businessLicenseRegisteredCapital` | **◆ ○** |
+| `registeredZip` | 注册地邮编 | 营业执照地址区划 | 字符串，最多 6 位（前端） | — | **◆ ○** |
+| `registeredRegion` | 注册地行政区划 | 营业执照住所拆分 | 字符串 | — | **◆ ○** |
+| `registeredAddressDetail` | 注册地址（住所） | 营业执照「住所」 | 字符串 | `address`、`registeredAddress`、`domicile`、`businessLicenseAddress` | **◆ ○** |
+| `actualLocation` | 实际经营地址 | 证照或登记簿（若有） | 字符串 | — | **◆ ○** |
+| `businessScope` | 经营范围 | 营业执照；**勿**把危化「许可范围」写入证名键 | 多行字符串 | 误写入 `safety*` 前缀的 scope 类键会 alias 到本键 | **◆ ○** |
+| `companyPhone` | 公司电话 | 一般非证面，多为补录 | 字符串 | — | **—** |
+| `companyEmail` | 公司邮箱 | 一般非证面 | 字符串 | — | **—** |
+| `companyFax` | 公司传真 | 一般非证面 | 字符串 | — | **—** |
+| `learnChannel` | 获知渠道 | 非证照字段 | 字符串 | — | **—** |
+
+---
+
+### 7.2 企业资质信息
+
+| `form_patch` 键 | 表单标签 | 主要证照来源 | 值类型 / 格式 | 归一化与别名（摘要） | 多主体 / 歧义 |
+|-----------------|----------|--------------|---------------|----------------------|---------------|
+| `unifiedSocialCreditCode` | 统一社会信用代码 | 营业执照 | 18 位字符串 | `creditCode`、`socialCreditCode`、`businessLicenseUnifiedSocialCreditCode` | **◆ ◇ ○** |
+| `qualificationIdDocType` | 证件类型（与号码并排） | 身份证人像面；缺省推断 | `身份证` / `护照` / `港澳居民来往内地通行证` | 仅有 `qualificationIdDocNumber` 时后端 `putIfAbsent("身份证")` | **—** |
+| `qualificationIdDocNumber` | 证件号码 | 身份证「公民身份号码」 | 字符串 | `idCardNumber`、`idNumber`、`citizenIdNumber` | **—** |
+
+---
+
+### 7.3 专业资质 — 危险化学品经营许可证（`safety*`）
+
+| `form_patch` 键 | 表单标签 | 主要证照来源 | 值类型 / 格式 | 归一化与别名（摘要） | 多主体 / 歧义 |
+|-----------------|----------|--------------|---------------|----------------------|---------------|
+| `safetyAdminLicenseName` | 行政许可名称 | 证面标题 | 固定全称：**危险化学品经营许可证** | `safetyPermitName`、`safetyCertificateName`；非标准标题会被 **纠正** | **▲** |
+| `safetyLicenseNo` | 编号 | 危化证编号 | 字符串 | `safetyPermitNumber`、`safetyLicenseNumber` | **▲** |
+| `safetyLicenseValidityMode` | 有效期模式 | 证面「长期」等 | `fixed` \| `long`；默认与 range 联动 | 有 `safetyLicenseValidityRange` 时缺省 `fixed` | **▲** |
+| `safetyLicenseValidityRange` | 有效期起止 | 证面有效期 | `[start,end]` ISO；前端 `[dayjs, dayjs]` | 合并 `safetyPermitValidityPeriodStart/End` 等自创键 | **▲** |
+| `safetyIssuingAuthority` | 发证机构 | 危化证 | 字符串 | `safetyPermitIssuingAuthority`、`safetyIssueAuthority` | **▲** |
+| `safetyLegalRepresentative` | 法定代表人（负责人） | 证面「主要负责人」 | 字符串 | `safetyLegalRep`、`safetyPermitLegalRepresentative` | **▲** |
+
+前端 `initialValues`：`safetyLicenseValidityMode` 默认 **`fixed`**。
+
+---
+
+### 7.4 专业资质 — 道路危险货物运输许可证（`transport*`）
+
+| `form_patch` 键 | 表单标签 | 主要证照来源 | 值类型 / 格式 | 归一化与别名（摘要） | 多主体 / 歧义 |
+|-----------------|----------|--------------|---------------|----------------------|---------------|
+| `transportAdminLicenseName` | 行政许可名称 | 证面标题 | 固定全称：**道路危险货物运输许可证** | `transportPermitName`、`transportCertificateName`；非标准标题 **纠正** | **▲** |
+| `transportLicenseNo` | 编号 | 运输证编号 | 字符串 | `transportPermitNumber`、`transportLicenseNumber` | **▲** |
+| `transportLicenseValidityMode` | 有效期模式 | 证面 | `fixed` \| `long` | 有 range 时缺省 `fixed` | **▲** |
+| `transportLicenseValidityRange` | 有效期起止 | 证面 | `[start,end]` ISO | 合并 `transportPermitValidityPeriodStart/End` 等 | **▲** |
+| `transportIssuingAuthority` | 发证机构 | 运输证 | 字符串 | `transportPermitIssuingAuthority`、`transportIssueAuthority` | **▲** |
+| `transportLegalRepresentative` | （隐藏项） | 运输证负责人 | 字符串 | 表单项 `hidden`；仍进白名单与 **▲** 族 | **▲** |
+
+前端 `initialValues`：`transportLicenseValidityMode` 默认 **`long`**（与危化区块不同，填表时注意 UI 默认与识别结果可能不一致）。
+
+---
+
+### 7.5 前端专用（非 `form_patch` 键）
+
+| 名称 | 作用 |
+|------|------|
+| `AMBIGUITY_FIELD_KEY_ALIASES` | 歧义 `field_key`：`enterpriseName`、`businessName` → `companyName` |
+| `VISION_CLEAR_FIELD_SENTINEL` | 歧义选项 `__CLEAR_FIELD__`：清空该字段（日期为 `undefined`，其余为 `""`） |
+| `FORM_RANGE_KEYS` | `normalizeVisionFormPatch` 将 ISO 二元组转为 `dayjs` RangePicker |
+| `LEGACY_SINGLE_DATE_TO_RANGE` | 旧键 `*ValidityDate` → `*ValidityRange`（兼容历史 patch） |
+
+**新增字段**时：在本表末尾增一行，并同步 `form_vision_fill.md`、`CANONICAL_KEYS`、必要时歧义族与 `VISION_*_FIELD_KEYS`；步骤见 **第八章**。
 
 ---
 
@@ -335,3 +407,7 @@ A：改 `DashScopeModelConfig` 中 `formVisionDashScopeChatModel`；注意 `visi
 ---
 
 维护时以 **技能 + `FormVisionPatchNormalizer.CANONICAL_KEYS` + `App.tsx` Form.Item** 三处对齐为准；改一处处处改，可避免「模型填了、后端丢了、前端没框」类问题。
+
+---
+
+> **文档维护**：第七章「逐键对照表」于 2026-05-19 由 **Cursor Composer** 根据当前代码库整理。

@@ -10,7 +10,7 @@
 |------|------|
 | [README-MEMORY-SESSION.md](README-MEMORY-SESSION.md) | Memory vs Session、JsonSession / Redis、前端 localStorage 与 formContext 对照 |
 | [README-REDIS.md](README-REDIS.md) | Redis Session 架构、键结构、Lettuce 选型、本机数据样例与排查 |
-| [README-VISION-FILL.md](README-VISION-FILL.md) | **form_vision_fill**：证照识别 → 表单回填、歧义、扩展新字段/新证照 |
+| [README-VISION-FILL.md](README-VISION-FILL.md) | **form_vision_fill**：证照识别 → 表单回填、**32 键逐键对照**、扩展新证照 |
 
 ---
 
