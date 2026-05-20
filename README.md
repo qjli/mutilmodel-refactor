@@ -1,4 +1,4 @@
-# multimodal-demo
+# multimodal-demo（重构版）
 
 企业工商与资质类 **结构化表单** 演示应用：左侧 **AgentScope Java** 智能对话（含多图视觉流式识别），右侧 **Ant Design** 表单；模型输出经 **camelCase `form_patch`** 回填，支持 **多主体营业执照歧义** 与 **材料清单卡片**（`upload_guide`）。
 
@@ -10,6 +10,7 @@
 |------|------|
 | [README-MEMORY-SESSION.md](README-MEMORY-SESSION.md) | Memory vs Session、JsonSession / Redis、前端 localStorage 与 formContext 对照 |
 | [README-REDIS.md](README-REDIS.md) | Redis Session 架构、键结构、Lettuce 选型、本机数据样例与排查 |
+| [README-VISION-FILL.md](README-VISION-FILL.md) | **form_vision_fill**：证照识别 → 表单回填、歧义、扩展新字段/新证照 |
 
 ---
 
@@ -46,7 +47,7 @@
 | **材料清单卡** | 由 `upload_guide` 驱动；与 **技能** 及 **服务端意图/覆盖推断** 对齐（见下文）。 |
 | **会话持久化** | 默认 **`store=redis`**（`RedisSession` + Lettuce）；无 Redis 时可 **`store=file`**（`JsonSession` 落盘）。文本与视觉 Agent 共用同一 `Session` Bean 与 `sessionId`。 |
 | **材料覆盖推断** | 基于 **上传文件名关键词** 累计四类证照是否「出现过」；`store=redis` 时写入 Redis 键 `coverage:{sessionId}`，`store=file` 时写入 `upload_material_coverage.json`（**非**图像内容识别）。 |
-| **多轮上传歧义** | 视觉请求可附带 **`formContext`**（当前表单 JSON）；多主体检测合并「已填报」与本轮识别结果，生成 `ambiguities`。 |
+| **多轮上传歧义** | 视觉请求可附带 **`formContext`**（当前表单 JSON）；多主体检测合并「已填报」与本轮识别结果，生成 `ambiguities`。详见 [README-VISION-FILL.md](README-VISION-FILL.md)。 |
 
 ---
 

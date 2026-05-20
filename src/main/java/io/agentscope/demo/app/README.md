@@ -21,7 +21,7 @@
 **非本包但强相关**：
 
 - `io.agentscope.demo.SessionIds`：对 URL 中的 `sessionId` 做安全校验（单路径段、防 `..` 等），供 `JsonSession` 落盘目录名。
-- `classpath:/skills/form_vision_fill.md`：表单字段与歧义约定。  
+- `classpath:/skills/form_vision_fill.md`：表单字段与歧义约定（详解见仓库根 [README-VISION-FILL.md](../../../../README-VISION-FILL.md)）。  
 - `classpath:/skills/upload_guide_dialog.md`：上传操作说明、`upload_guide` 材料卡与白名单。
 
 ---
