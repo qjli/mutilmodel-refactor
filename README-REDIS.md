@@ -6,6 +6,18 @@
 
 **持久化原理（saveTo → RedisSession → 键结构）** 见 [第四章](#四session-持久化到-redis-的原理)。
 
+### 为什么会出现 `io.agentscope.core.session.redis` 这个路径？
+
+| 位置 | 是否本项目代码 | 说明 |
+|------|----------------|------|
+| **Maven 依赖 jar** | ✅ 官方实现 | `agentscope-extensions-session-redis` 内类，如 `RedisSession`、`LettuceClientAdapter` |
+| **`src/main/java/io/agentscope/demo/...`** | ✅ 本项目 | 业务与 Spring 装配（如 `AgentscopeRedisSessionConfiguration`） |
+| **仓库根 `io/agentscope/core/...`** | ❌ 应删除 | 多为从 jar **误解压** 的副本，不参与编译，易与官方版本冲突 |
+
+本项目**只 import 官方类**，在 `AgentscopeRedisSessionConfiguration` 中 `RedisSession.builder()...build()` 注入 Spring；**不要**在仓库内维护一份 `RedisSession.java` 拷贝。根目录 `/io/agentscope/` 已加入 `.gitignore`。
+
+查看官方源码：解压 `~/.m2/.../agentscope-extensions-session-redis-*.jar` 或 [GitHub 扩展仓库](https://github.com/agentscope-ai/agentscope-java/tree/main/agentscope-extensions/agentscope-extensions-session-redis)。
+
 ---
 
 ## 一、为什么要用 Redis Session
@@ -137,6 +149,8 @@ HTTP 请求携带 sessionId
 
 ### 4.2 一次 HTTP 请求的完整链路
 
+以下以文本对话 **`POST /api/sessions/{sessionId}/messages`** 为例，说明从浏览器发起到 Redis 落盘再返回的完整过程。核心规律是：**每轮 HTTP 新建一个空的 Agent 与 Memory，历史对话从 Redis 读入；本轮结束后再把更新后的状态写回 Redis**。右侧表单、证照 coverage 等**不在这条链路上**。
+
 ```mermaid
 sequenceDiagram
     participant FE as 前端 sessionId
@@ -163,7 +177,50 @@ sequenceDiagram
     RS->>R: SET / RPUSH / SADD _keys
 ```
 
-视觉 SSE 链路相同：`FormVisionStreamService` 在流式推理结束后同样调用 `agent.saveTo(agentscopeSession, safeId)`。
+#### 阶段一：请求进入与 sessionId 校验
+
+前端在 URL 中携带本会话的 **`sessionId`**（通常为页面加载时生成的 UUID），请求体为当前用户输入的 `content`。`DemoChatService` 首先调用 **`SessionIds.requireSafeSessionId`**：剔除非法字符、禁止路径穿越，保证该 id 只能作为 Redis 键名中的一段。校验失败则直接返回 400，**不会访问 Redis**。
+
+#### 阶段二：组装「空壳」Agent（内存里尚无历史）
+
+服务层 **`new InMemoryMemory()`** 并 `ReActAgent.builder()...build()`，按用户意图注册 Skill、拼接 systemPrompt 等。此时 JVM 里的 Memory **是空的**，上一轮对话并不自动留在堆中——这是有意设计，避免多请求共享可变 Agent 状态。
+
+#### 阶段三：从 Redis 恢复历史（loadIfExists）
+
+调用 **`agent.loadIfExists(agentscopeSession, safeId)`**：
+
+1. 若为本进程**第一次**访问 Session，**`LazyInitializingSession`** 会先创建底层 **`RedisSession`** 并连接 Lettuce（打日志 `initializing redis session`）。
+2. `ReActAgent` 检查 Redis 中是否存在该 `sessionId`（看 `_keys` 集合是否非空）。
+3. **若存在**：通过 `Session.get` / `getList` 读取 `agent_meta`、`memory_messages:list` 等，反序列化后填入当前 Agent 与 **`InMemoryMemory`**。模型即将看到的是「历史多轮 Msg + 本轮用户输入」。
+4. **若不存在**（新会话第一次说话）：`loadIfExists` 返回 false，Memory 仍为空，相当于从零开始聊。
+
+对应 Redis 命令主要为：**`GET`**（单值 JSON）、**`LRANGE`**（消息列表），键名形如 `agentscope:multimodal-demo:{sessionId}:memory_messages:list`。
+
+#### 阶段四：本轮推理（call）
+
+**`agent.call(userMsg)`** 将用户消息追加到 Memory，调用 DashScope；ReAct 循环中可能产生 assistant、tool 等 Msg，均进入**当前请求**的 `InMemoryMemory`。此阶段**只读写 JVM 内存**，一般不访问 Redis（除非 Agent 内部另有工具逻辑）。
+
+#### 阶段五：写回 Redis（saveTo）
+
+请求结束前调用 **`agent.saveTo(agentscopeSession, safeId)`**：
+
+1. **`ReActAgent`** 将 `agent_meta`（含 systemPrompt）、**`memory.saveTo`**（整份 Msg 列表）、`toolkit_activeGroups` 等交给 `Session`。
+2. **`RedisSession`** 把各 state 序列化为 JSON：**单值**用 `SET`，**消息列表**用 `RPUSH`（或 hash 未变时增量追加），并在 **`{sessionId}:_keys`** 中登记键名。
+3. HTTP 响应返回 `reply`、`formPatch` 等给前端；**此时 Redis 中的会话已与本轮对话对齐**，下次同 `sessionId` 请求会加载到包含本轮的完整历史。
+
+若本轮失败且未执行 `saveTo`，Redis 中仍是上一轮结束时的快照，不会出现「半条写入」的 Msg 列表（以一次完整 `saveTo` 为边界）。
+
+#### 阶段六：响应返回
+
+`DemoChatService` 解析结构化结果、归一化 `formPatch`、按需构造 `uploadGuide`，封装为 **`ChatResponse`** 返回。前端更新对话气泡；表单补丁写 **localStorage**，**不**在此链路写入 Redis。
+
+---
+
+**与上图的对应关系**：时序图自上而下即阶段一～六；`LAZY` 仅在阶段三、五穿透到 `RS` → `R`。
+
+**多图视觉 SSE**（`FormVisionStreamService`）：阶段二～五相同，区别是阶段四为 **`stream` + SSE 推送**，且在读图后会 **`mergeFromHints` 更新 coverage 侧车**（走 `StringRedisTemplate`，不经 `RedisSession`）。流式结束同样执行 **`saveTo`**，故 Redis 里会新增含 base64 图片的 USER Msg 与视觉 assistant 消息。
+
+**多实例部署**：任意 Pod 只要连接同一 Redis、`key-prefix` 与 `sessionId`，阶段三读到的就是其他实例在阶段五写入的数据。
 
 ### 4.3 `saveTo` 写了哪些 state（ReActAgent）
 

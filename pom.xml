@@ -39,6 +39,7 @@
             <artifactId>agentscope</artifactId>
             <version>${agentscope.version}</version>
         </dependency>
+        <!-- RedisSession：io.agentscope.core.session.redis（勿将 jar 内源码解压到仓库根 io/agentscope/） -->
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-extensions-session-redis</artifactId>

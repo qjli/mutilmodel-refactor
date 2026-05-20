@@ -1,5 +1,8 @@
 target/
 .idea/
+
+# 勿将 agentscope-extensions-session-redis 等依赖源码解压到仓库根（非本项目代码）
+/io/agentscope/
 *.iml
 .DS_Store
 

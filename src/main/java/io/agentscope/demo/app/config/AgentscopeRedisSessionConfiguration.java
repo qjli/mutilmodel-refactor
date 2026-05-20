@@ -15,7 +15,11 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
- * 基于 {@link RedisSession} + Lettuce 的分布式会话（生产推荐）。
+ * 基于官方扩展 {@link RedisSession} + Lettuce 的分布式会话（生产推荐）。
+ *
+ * <p>{@code RedisSession} 类路径为 {@code io.agentscope.core.session.redis}，来自依赖
+ * {@code agentscope-extensions-session-redis}（见 {@code pom.xml}），<strong>非</strong>本仓库
+ * {@code src/main/java} 下的实现。本类仅负责 Spring Bean 装配与 {@link RedisURI} 映射。
  *
  * <p>连接参数复用 {@code spring.data.redis.*}；AgentScope 状态键使用 {@code agentscope.session.key-prefix}。
  */
