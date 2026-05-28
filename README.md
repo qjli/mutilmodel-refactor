@@ -11,6 +11,10 @@
 | [README-MEMORY-SESSION.md](README-MEMORY-SESSION.md) | Memory vs Session、JsonSession / Redis、前端 localStorage 与 formContext 对照 |
 | [README-REDIS.md](README-REDIS.md) | Redis Session 架构、键结构、Lettuce 选型、本机数据样例与排查 |
 | [README-VISION-FILL.md](README-VISION-FILL.md) | **form_vision_fill**：证照识别 → 表单回填、**32 键逐键对照**、扩展新证照 |
+| [deploy/DEPLOY-ECS.md](deploy/DEPLOY-ECS.md) | **Docker 镜像构建**、本地 compose 试跑、**阿里云 ECS** 部署与运维 |
+| [deploy/DOCKER-ARCH.md](deploy/DOCKER-ARCH.md) | **Nginx + API 双容器**，仅 8888 对外 |
+| [deploy/DOCKER-MIRROR-CN.md](deploy/DOCKER-MIRROR-CN.md) | Docker Hub 超时、**国内镜像加速**与 `docker-build-cn.sh` |
+| [deploy/ECS-LOCAL-IMAGE.md](deploy/ECS-LOCAL-IMAGE.md) | **本地打镜像 → scp 上传 ECS → docker load → compose 启动**（逐步命令） |
 
 ---
 
@@ -316,6 +320,16 @@ mvn -q -Pfrontend spring-boot:run
 2. 终端二：`cd frontend && npm install && npm run dev`（5173）  
 
 浏览器访问 **http://localhost:5173**；`/api` 由 Vite 代理到 8888。`WebConfig` 已对 `http://localhost:5173` 与 `127.0.0.1:5173` 放开 **`/api/**`** 的 CORS。
+
+### D. Docker（Nginx 前端 + API 分离，对外仅 8888）
+
+```bash
+./scripts/docker-build-cn.sh   # 生成 mutilmodel-api + mutilmodel-web
+cp .env.example .env
+./scripts/docker-up.sh         # http://localhost:8888/ → nginx
+```
+
+架构说明 **[deploy/DOCKER-ARCH.md](deploy/DOCKER-ARCH.md)**；ECS 步骤 **[deploy/DEPLOY-ECS.md](deploy/DEPLOY-ECS.md)**。
 
 ---
 

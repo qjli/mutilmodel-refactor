@@ -1,0 +1,62 @@
+# 对外仅暴露 nginx:8888；app 仅内网；redis 仅内网
+# cp .env.example .env 并填写 DASHSCOPE_API_KEY
+
+services:
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    platform: linux/amd64
+    container_name: mutilmodel-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-123456}
+      --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-123456}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app-net
+
+  app:
+    image: ${API_IMAGE_NAME:-mutilmodel-api}:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: mutilmodel-api
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    expose:
+      - "8888"
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?请在 .env 中设置 DASHSCOPE_API_KEY}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-123456}
+      AGENTSCOPE_SESSION_STORE: redis
+      AGENTSCOPE_SESSION_KEY_PREFIX: ${AGENTSCOPE_SESSION_KEY_PREFIX:-agentscope:multimodal-demo:}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Ddashscope.vision-enable-thinking=false}
+    networks:
+      - app-net
+
+  nginx:
+    image: ${NGINX_IMAGE_NAME:-mutilmodel-web}:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: mutilmodel-web
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "${APP_PORT:-8888}:80"
+    networks:
+      - app-net
+
+volumes:
+  redis-data:
+
+networks:
+  app-net:
+    driver: bridge

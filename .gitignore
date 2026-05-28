@@ -12,6 +12,9 @@ node_modules/
 # 本地密钥（勿提交）
 application-local.yml
 **/application-local.yml
+.env
+.env.docker
+dist/
 
 # Vite build output（npm run build / mvn -Pfrontend package）
 src/main/resources/static/

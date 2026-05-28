@@ -52,6 +52,7 @@ import {
   type VisionUploadGuide,
 } from "./api";
 import { AppHeader } from "./components/AppHeader";
+import { randomId } from "./ids";
 
 type ChatResponse = {
   reply: string;
@@ -450,7 +451,7 @@ export default function MultimodalConsole() {
   const [form] = Form.useForm<FormValues>();
   const safetyLicenseValidityMode = Form.useWatch("safetyLicenseValidityMode", form);
   const transportLicenseValidityMode = Form.useWatch("transportLicenseValidityMode", form);
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
+  const sessionId = useMemo(() => randomId(), []);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -594,8 +595,8 @@ export default function MultimodalConsole() {
       name: f.name && f.name.trim() ? f.name : "image",
       previewUrl: URL.createObjectURL(f),
     }));
-    const userMsgId = crypto.randomUUID();
-    const assistantId = crypto.randomUUID();
+    const userMsgId = randomId();
+    const assistantId = randomId();
 
     setVisionBusy(true);
     setMessages((m) => [
@@ -741,12 +742,12 @@ export default function MultimodalConsole() {
     }
     const now = Date.now();
     const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: randomId(),
       role: "user",
       content: text,
       createdAt: now,
     };
-    const pendingId = crypto.randomUUID();
+    const pendingId = randomId();
     setMessages((m) => [
       ...m,
       userMsg,

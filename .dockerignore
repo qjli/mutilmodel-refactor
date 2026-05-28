@@ -1,0 +1,23 @@
+target/
+.idea/
+*.iml
+.DS_Store
+node_modules/
+.chorus/
+/io/agentscope/
+.git/
+.gitignore
+
+application-local.yml
+**/application-local.yml
+.env
+.env.*
+
+# 本地构建产物由镜像内重新生成
+src/main/resources/static/
+
+# 文档与脚本不参与镜像层（减小 context）
+deploy/
+scripts/docker-export/
+*.md
+!README.md

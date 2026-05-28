@@ -26,6 +26,11 @@ spring:
       # 有密码时在 application-local.yml 配置 spring.data.redis.password，或 export REDIS_PASSWORD
       timeout: ${REDIS_TIMEOUT:3s}
 
+# CORS：逗号分隔的 allowedOriginPatterns。Docker/ECS 经 Nginx 访问时 Origin 为 http://<IP>:8888，须含 * 或具体域名
+app:
+  cors:
+    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:*,http://127.0.0.1:*,*}
+
 agentscope:
   session:
     # redis（默认，生产/多实例）| file（本地无 Redis）

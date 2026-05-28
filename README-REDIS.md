@@ -432,7 +432,7 @@ agentscope:
 | **LIST** | `...:{sessionId}:memory_messages:list` | RedisSession | 短期记忆，每条一个 `Msg` JSON |
 | **STRING** | `...:{sessionId}:memory_messages:list:_hash` | RedisSession | 列表内容校验哈希（变更检测） |
 | **STRING** | `...:{sessionId}:toolkit_activeGroups` | RedisSession | 工具组激活状态 |
-| **STRING** | `agentscope:multimodal-demo:coverage:{sessionId}` | 本项目 | 已推断上传的材料 ID 列表，TTL 90 天 |
+
 
 与 **JsonSession 磁盘布局** 的对应关系：
 

@@ -1,0 +1,6 @@
+{
+  "registry-mirrors": [
+    "https://你的ID.mirror.aliyuncs.com",
+    "https://docker.m.daocloud.io"
+  ]
+}
